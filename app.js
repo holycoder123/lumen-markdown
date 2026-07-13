@@ -1,4 +1,4 @@
-const starter = `# 欢迎使用墨笺
+const starter = `# 欢迎使用 Lumen
 
 一款轻盈、专注的 **Markdown 编辑器**。你的内容会实时呈现在右侧，并自动保存在当前浏览器中。
 
