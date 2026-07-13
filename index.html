@@ -81,11 +81,23 @@
         </div>
         <footer class="pane-footer" id="editorFooter">
           <span id="saveStatus">已自动保存</span>
-          <span><b id="wordCount">0</b> 字符 · <b id="lineCount">1</b> 行</span>
+          <span><b id="wordCount">0</b> 字符 · <b id="lineCount">1</b> 行 · 编码：<select id="encodingEditorSelect" aria-label="修改文件编码">
+            <option value="utf-8">UTF-8</option>
+            <option value="gb18030">GB18030</option>
+            <option value="gbk">GBK</option>
+            <option value="utf-16le">UTF-16 LE</option>
+            <option value="utf-16be">UTF-16 BE</option>
+          </select></span>
         </footer>
         <footer class="pane-footer preview-footer" id="previewFooter" hidden>
           <span><span class="pulse"></span> 实时同步</span>
-          <span>内容仅保存在本地</span>
+          <span class="encoding-status">文件编码：<select id="encodingFooterSelect" aria-label="修改文件编码">
+            <option value="utf-8">UTF-8</option>
+            <option value="gb18030">GB18030</option>
+            <option value="gbk">GBK</option>
+            <option value="utf-16le">UTF-16 LE</option>
+            <option value="utf-16be">UTF-16 BE</option>
+          </select></span>
         </footer>
       </section>
 

@@ -50,6 +50,8 @@ const maximizeButton = document.querySelector('#maximizeButton');
 const closeButton = document.querySelector('#closeButton');
 const themeButton = document.querySelector('#themeButton');
 const encodingSelect = document.querySelector('#encodingSelect');
+const encodingFooterSelect = document.querySelector('#encodingFooterSelect');
+const encodingEditorSelect = document.querySelector('#encodingEditorSelect');
 let currentFileBytes = null;
 document.title = 'Lumen';
 const brandName = document.querySelector('.brand > span:nth-of-type(2)');
@@ -204,6 +206,14 @@ function decodeBytes(bytes, encoding) {
   catch (_) { showToast(`不支持 ${encoding} 编码`); return null; }
 }
 
+function detectEncoding(bytes) {
+  if (bytes[0] === 0xff && bytes[1] === 0xfe) return 'utf-16le';
+  if (bytes[0] === 0xfe && bytes[1] === 0xff) return 'utf-16be';
+  if (bytes[0] === 0xef && bytes[1] === 0xbb && bytes[2] === 0xbf) return 'utf-8';
+  try { new TextDecoder('utf-8', { fatal: true }).decode(bytes); return 'utf-8'; }
+  catch (_) { return 'gb18030'; }
+}
+
 function base64ToBytes(value) {
   const binary = atob(value);
   return Uint8Array.from(binary, character => character.charCodeAt(0));
@@ -218,6 +228,8 @@ function bytesToBase64(bytes) {
 
 function setEncoding(encoding, reload = true) {
   encodingSelect.value = encoding;
+  encodingFooterSelect.value = encoding;
+  encodingEditorSelect.value = encoding;
   try { localStorage.setItem('lumen-encoding', encoding); } catch (_) { /* storage may be disabled */ }
   if (reload && currentFileBytes) {
     const decoded = decodeBytes(currentFileBytes, encoding);
@@ -261,6 +273,7 @@ function loadFile(file) {
   const reader = new FileReader();
   reader.onload = () => {
     currentFileBytes = new Uint8Array(reader.result);
+    setEncoding(detectEncoding(currentFileBytes), false);
     const decoded = decodeBytes(currentFileBytes, encodingSelect.value);
     if (decoded === null) return;
     editor.value = decoded; documentName.textContent = file.name; update(); showToast(`已载入 ${file.name}`);
@@ -322,6 +335,8 @@ document.querySelector('#downloadButton').addEventListener('click', () => {
   else finish(bytesToBase64(new TextEncoder().encode(editor.value)));
 });
 encodingSelect.addEventListener('change', () => setEncoding(encodingSelect.value));
+encodingFooterSelect.addEventListener('change', () => setEncoding(encodingFooterSelect.value));
+encodingEditorSelect.addEventListener('change', () => setEncoding(encodingEditorSelect.value));
 copyHtmlButton.addEventListener('click', async () => {
   try { await navigator.clipboard.writeText(preview.innerHTML); showToast('HTML 已复制'); }
   catch (_) { showToast('无法访问剪贴板'); }
@@ -362,6 +377,7 @@ setMode(initialMode === 'preview' ? 'preview' : 'edit');
 if (window.mojianDesktop) {
   window.mojianDesktop.onOpenFile(file => {
     currentFileBytes = file.bytes ? base64ToBytes(file.bytes) : new TextEncoder().encode(file.content || '');
+    setEncoding(detectEncoding(currentFileBytes), false);
     const decoded = decodeBytes(currentFileBytes, encodingSelect.value);
     if (decoded === null) return;
     editor.value = decoded;
