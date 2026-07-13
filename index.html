@@ -1,0 +1,90 @@
+<!doctype html>
+<html lang="zh-CN">
+<head>
+  <meta charset="UTF-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+  <meta name="description" content="一款轻量、私密的浏览器端 Markdown 编辑与预览工具" />
+  <title>墨笺 · Markdown 编辑器</title>
+  <link rel="stylesheet" href="styles.css" />
+</head>
+<body>
+  <div class="app-shell">
+    <div class="window-bar">
+      <div class="window-brand"><span class="window-mark">L</span><span class="window-title">Lumen</span></div>
+      <div class="window-controls" aria-label="Window controls">
+        <button id="minimizeButton" type="button" aria-label="Minimize">−</button>
+        <button id="maximizeButton" type="button" aria-label="Maximize">□</button>
+        <button id="closeButton" class="close-window" type="button" aria-label="Close">×</button>
+      </div>
+    </div>
+    <header class="topbar">
+      <div class="brand" aria-label="墨笺 Markdown 编辑器">
+        <span class="brand-mark">M<span>↓</span></span>
+        <span>墨笺</span>
+        <span class="brand-subtitle">Markdown Editor</span>
+      </div>
+      <div class="document-name" id="documentName" title="点击重命名" tabindex="0">未命名文档.md</div>
+      <div class="actions">
+        <button class="button secondary theme-button" id="themeButton" type="button" title="切换 Dawn Light / Midnight Glow" aria-label="切换主题">☼</button>
+        <input id="fileInput" type="file" accept=".md,.markdown,text/markdown,text/plain" hidden />
+        <button class="button secondary" id="uploadButton" type="button">
+          <span aria-hidden="true">↥</span> 上传文档
+        </button>
+        <button class="button primary" id="downloadButton" type="button">
+          <span aria-hidden="true">↓</span> 导出 .md
+        </button>
+        <button class="button secondary" id="defaultAppButton" type="button" hidden>设置为默认打开方式</button>
+      </div>
+    </header>
+
+    <main class="workspace" id="dropZone">
+      <section class="pane document-pane" aria-label="Markdown 编辑与预览面板">
+        <div class="pane-header">
+          <div class="mode-switch" role="tablist" aria-label="视图模式">
+            <button class="mode-button" id="editModeButton" type="button" role="tab" aria-selected="false" aria-controls="editorView">
+              <span aria-hidden="true">✎</span> 编辑
+            </button>
+            <button class="mode-button active" id="previewModeButton" type="button" role="tab" aria-selected="true" aria-controls="previewView">
+              <span aria-hidden="true">◉</span> 预览
+            </button>
+          </div>
+          <div class="header-tools">
+            <div class="toolbar" id="editorToolbar" aria-label="编辑工具栏">
+              <button data-wrap="**" title="粗体 (Ctrl+B)"><b>B</b></button>
+              <button data-wrap="*" title="斜体 (Ctrl+I)"><i>I</i></button>
+              <button data-prefix="## " title="标题">H</button>
+              <button data-prefix="> " title="引用">❞</button>
+              <button data-wrap="`" title="行内代码">&lt;/&gt;</button>
+              <button data-prefix="- " title="无序列表">☷</button>
+            </div>
+            <button class="icon-button copy-button" id="copyHtmlButton" type="button" title="复制 HTML" hidden>⧉</button>
+          </div>
+        </div>
+        <div class="view active" id="editorView" role="tabpanel" aria-labelledby="editModeButton">
+          <div class="editor-wrap">
+            <div class="line-numbers" id="lineNumbers" aria-hidden="true">1</div>
+            <textarea id="editor" spellcheck="false" aria-label="Markdown 内容"></textarea>
+          </div>
+        </div>
+        <div class="view" id="previewView" role="tabpanel" aria-labelledby="previewModeButton" hidden>
+          <article class="markdown-body" id="preview"></article>
+        </div>
+        <footer class="pane-footer" id="editorFooter">
+          <span id="saveStatus">已自动保存</span>
+          <span><b id="wordCount">0</b> 字符 · <b id="lineCount">1</b> 行</span>
+        </footer>
+        <footer class="pane-footer preview-footer" id="previewFooter" hidden>
+          <span><span class="pulse"></span> 实时同步</span>
+          <span>内容仅保存在本地</span>
+        </footer>
+      </section>
+
+      <div class="drop-overlay" id="dropOverlay">
+        <div><span>↥</span><strong>松开以上传 Markdown 文档</strong><small>支持 .md 和 .markdown</small></div>
+      </div>
+    </main>
+  </div>
+  <div class="toast" id="toast" role="status" aria-live="polite"></div>
+  <script src="app.js"></script>
+</body>
+</html>

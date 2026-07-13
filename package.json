@@ -1,0 +1,22 @@
+{
+  "name": "lumen-markdown-editor",
+  "version": "1.0.0",
+  "description": "A quiet space where ideas illuminate.",
+  "main": "main.js",
+  "private": true,
+  "scripts": { "start": "electron .", "dev": "electron .", "dist": "electron-builder --win" },
+  "devDependencies": { "electron": "^38.0.0", "electron-builder": "^26.0.0" },
+  "build": {
+    "appId": "com.lumen.markdowneditor",
+    "productName": "Lumen",
+    "asar": true,
+    "files": ["index.html", "styles.css", "app.js", "main.js", "preload.js", "package.json", "assets/**/*"],
+    "win": { "icon": "assets/lumen.ico", "target": ["nsis", "portable"], "artifactName": "${productName}-${version}-${arch}.${ext}" },
+    "nsis": { "artifactName": "${productName}-${version}-setup-${arch}.${ext}", "oneClick": false, "allowToChangeInstallationDirectory": true, "createDesktopShortcut": true, "createStartMenuShortcut": true, "runAfterFinish": true },
+    "portable": { "artifactName": "${productName}-${version}-portable-${arch}.${ext}" },
+    "fileAssociations": [
+      { "ext": "md", "name": "Markdown Document", "description": "Markdown Document", "role": "Editor" },
+      { "ext": "markdown", "name": "Markdown Document", "description": "Markdown Document", "role": "Editor" }
+    ]
+  }
+}
