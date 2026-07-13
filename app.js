@@ -49,6 +49,8 @@ const minimizeButton = document.querySelector('#minimizeButton');
 const maximizeButton = document.querySelector('#maximizeButton');
 const closeButton = document.querySelector('#closeButton');
 const themeButton = document.querySelector('#themeButton');
+const encodingSelect = document.querySelector('#encodingSelect');
+let currentFileBytes = null;
 document.title = 'Lumen';
 const brandName = document.querySelector('.brand > span:nth-of-type(2)');
 if (brandName) brandName.textContent = 'Lumen';
@@ -197,6 +199,32 @@ function showToast(message) {
   setTimeout(() => toast.classList.remove('show'), 1800);
 }
 
+function decodeBytes(bytes, encoding) {
+  try { return new TextDecoder(encoding, { fatal: false }).decode(bytes); }
+  catch (_) { showToast(`不支持 ${encoding} 编码`); return null; }
+}
+
+function base64ToBytes(value) {
+  const binary = atob(value);
+  return Uint8Array.from(binary, character => character.charCodeAt(0));
+}
+
+function bytesToBase64(bytes) {
+  let binary = '';
+  const chunkSize = 0x8000;
+  for (let i = 0; i < bytes.length; i += chunkSize) binary += String.fromCharCode(...bytes.subarray(i, i + chunkSize));
+  return btoa(binary);
+}
+
+function setEncoding(encoding, reload = true) {
+  encodingSelect.value = encoding;
+  try { localStorage.setItem('lumen-encoding', encoding); } catch (_) { /* storage may be disabled */ }
+  if (reload && currentFileBytes) {
+    const decoded = decodeBytes(currentFileBytes, encoding);
+    if (decoded !== null) { editor.value = decoded; update(); showToast(`已按 ${encodingSelect.selectedOptions[0].textContent} 重新解析`); }
+  }
+}
+
 function setMode(mode) {
   const isEdit = mode === 'edit';
   const outgoing = isEdit ? preview : editor;
@@ -231,12 +259,17 @@ function loadFile(file) {
   }
   if (file.size > 5 * 1024 * 1024) { showToast('文件不能超过 5 MB'); return; }
   const reader = new FileReader();
-  reader.onload = () => { editor.value = String(reader.result); documentName.textContent = file.name; update(); showToast(`已载入 ${file.name}`); };
+  reader.onload = () => {
+    currentFileBytes = new Uint8Array(reader.result);
+    const decoded = decodeBytes(currentFileBytes, encodingSelect.value);
+    if (decoded === null) return;
+    editor.value = decoded; documentName.textContent = file.name; update(); showToast(`已载入 ${file.name}`);
+  };
   reader.onerror = () => showToast('文件读取失败，请重试');
-  reader.readAsText(file);
+  reader.readAsArrayBuffer(file);
 }
 
-editor.addEventListener('input', update);
+editor.addEventListener('input', () => { currentFileBytes = null; update(); });
 editor.addEventListener('scroll', () => {
   lineNumbers.scrollTop = editor.scrollTop;
   if (!syncingScroll && !editorView.hidden) {
@@ -278,11 +311,17 @@ document.querySelectorAll('.toolbar button').forEach(button => button.addEventLi
 document.querySelector('#uploadButton').addEventListener('click', () => fileInput.click());
 fileInput.addEventListener('change', () => { loadFile(fileInput.files[0]); fileInput.value = ''; });
 document.querySelector('#downloadButton').addEventListener('click', () => {
-  const blob = new Blob([editor.value], { type: 'text/markdown;charset=utf-8' });
-  const link = document.createElement('a'); link.href = URL.createObjectURL(blob);
-  link.download = /\.(md|markdown)$/i.test(documentName.textContent) ? documentName.textContent : `${documentName.textContent}.md`;
-  link.click(); setTimeout(() => URL.revokeObjectURL(link.href), 1000); showToast('文档已导出');
+  const encoding = encodingSelect.value;
+  const finish = base64 => {
+    const blob = new Blob([base64ToBytes(base64)], { type: `text/markdown;charset=${encoding}` });
+    const link = document.createElement('a'); link.href = URL.createObjectURL(blob);
+    link.download = /\.(md|markdown)$/i.test(documentName.textContent) ? documentName.textContent : `${documentName.textContent}.md`;
+    link.click(); setTimeout(() => URL.revokeObjectURL(link.href), 1000); showToast(`已按 ${encodingSelect.selectedOptions[0].textContent} 导出`);
+  };
+  if (window.mojianDesktop?.encodeText) window.mojianDesktop.encodeText(editor.value, encoding).then(finish).catch(() => showToast('当前环境不支持该编码导出'));
+  else finish(bytesToBase64(new TextEncoder().encode(editor.value)));
 });
+encodingSelect.addEventListener('change', () => setEncoding(encodingSelect.value));
 copyHtmlButton.addEventListener('click', async () => {
   try { await navigator.clipboard.writeText(preview.innerHTML); showToast('HTML 已复制'); }
   catch (_) { showToast('无法访问剪贴板'); }
@@ -308,6 +347,9 @@ window.addEventListener('dragover', event => event.preventDefault());
 window.addEventListener('dragleave', event => { event.preventDefault(); if (--dragDepth <= 0) { dragDepth = 0; dropOverlay.classList.remove('visible'); } });
 window.addEventListener('drop', event => { event.preventDefault(); dragDepth = 0; dropOverlay.classList.remove('visible'); loadFile(event.dataTransfer.files[0]); });
 
+try { setEncoding(localStorage.getItem('lumen-encoding') || 'utf-8', false); }
+catch (_) { setEncoding('utf-8', false); }
+
 try {
   editor.value = localStorage.getItem('mojian-content') ?? starter;
   documentName.textContent = localStorage.getItem('mojian-name') || '未命名文档.md';
@@ -319,7 +361,10 @@ setMode(initialMode === 'preview' ? 'preview' : 'edit');
 
 if (window.mojianDesktop) {
   window.mojianDesktop.onOpenFile(file => {
-    editor.value = file.content;
+    currentFileBytes = file.bytes ? base64ToBytes(file.bytes) : new TextEncoder().encode(file.content || '');
+    const decoded = decodeBytes(currentFileBytes, encodingSelect.value);
+    if (decoded === null) return;
+    editor.value = decoded;
     documentName.textContent = file.name;
     update();
     setMode('edit');

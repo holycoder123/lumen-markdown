@@ -2,6 +2,7 @@ const { contextBridge, ipcRenderer } = require('electron');
 
 contextBridge.exposeInMainWorld('mojianDesktop', {
   onOpenFile(callback) { ipcRenderer.on('open-file', (_event, file) => callback(file)); },
+  encodeText(text, encoding) { return ipcRenderer.invoke('encode-text', { text, encoding }); },
   setAsDefaultMarkdownApp() { return ipcRenderer.invoke('set-default-markdown-app'); },
   minimize() { ipcRenderer.send('window-minimize'); },
   toggleMaximize() { ipcRenderer.send('window-toggle-maximize'); },

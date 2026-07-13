@@ -8,6 +8,7 @@ Lumen 是一个轻量、专注且注重隐私的 Markdown 编辑器。它基于 
 - 支持粗体、斜体、标题、引用、行内代码和无序列表快捷插入
 - 支持代码块、表格、任务列表、链接、图片等常用 Markdown 语法
 - 拖放或选择 `.md` / `.markdown` 文件导入
+- 支持 UTF-8、GBK、GB18030、UTF-16 LE 和 UTF-16 BE 编码预览与导出
 - 导出为 Markdown 文件
 - 一键复制渲染后的 HTML
 - Dawn Light / Midnight Glow 两种主题，并记住主题选择

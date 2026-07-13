@@ -1,6 +1,7 @@
 const { app, BrowserWindow, dialog, ipcMain, shell } = require('electron');
 const fs = require('node:fs');
 const path = require('node:path');
+const iconv = require('iconv-lite');
 
 let mainWindow;
 let pendingFile;
@@ -12,7 +13,7 @@ function markdownPath(value) {
   return /\.(md|markdown)$/i.test(resolved) ? resolved : null;
 }
 function readMarkdown(filePath) {
-  try { return { name: path.basename(filePath), content: fs.readFileSync(filePath, 'utf8'), path: filePath }; }
+  try { return { name: path.basename(filePath), bytes: fs.readFileSync(filePath).toString('base64'), path: filePath }; }
   catch (error) { dialog.showErrorBox('无法打开 Markdown 文件', `${filePath}\n\n${error.message}`); return null; }
 }
 function fileFromArgs(argv) { return argv.map(markdownPath).find(Boolean) || null; }
@@ -39,6 +40,11 @@ else {
   app.on('activate', () => { if (!mainWindow) createWindow(); });
 }
 ipcMain.handle('set-default-markdown-app', async () => { if (process.platform === 'win32') { await shell.openExternal('ms-settings:defaultapps'); return { opened: true }; } return { opened: false }; });
+ipcMain.handle('encode-text', (_event, { text, encoding }) => {
+  const normalized = String(encoding || 'utf-8').toLowerCase();
+  if (!iconv.encodingExists(normalized)) throw new Error(`不支持的编码：${normalized}`);
+  return iconv.encode(String(text ?? ''), normalized).toString('base64');
+});
 ipcMain.on('window-minimize', () => mainWindow?.minimize());
 ipcMain.on('window-toggle-maximize', () => { if (mainWindow?.isMaximized()) mainWindow.unmaximize(); else mainWindow?.maximize(); });
 ipcMain.on('window-close', () => mainWindow?.close());
