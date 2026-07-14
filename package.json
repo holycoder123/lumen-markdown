@@ -17,6 +17,9 @@
     "appId": "com.lumen.markdowneditor",
     "productName": "Lumen",
     "asar": true,
+    "electronDownload": {
+      "mirror": "https://npmmirror.com/mirrors/electron/"
+    },
     "files": [
       "index.html",
       "styles.css",
