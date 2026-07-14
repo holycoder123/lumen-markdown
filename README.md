@@ -16,7 +16,7 @@
 
 </div>
 
-![Lumen interface preview](assets/readme-preview.svg)
+![Lumen interface preview](assets/readme-screenshot.png)
 
 ## 产品理念
 
