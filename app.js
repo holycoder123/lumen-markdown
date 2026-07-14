@@ -43,8 +43,6 @@ const editorView = document.querySelector('#editorView');
 const previewView = document.querySelector('#previewView');
 const documentPane = document.querySelector('.document-pane');
 const editorToolbar = document.querySelector('#editorToolbar');
-const editorFooter = document.querySelector('#editorFooter');
-const previewFooter = document.querySelector('#previewFooter');
 const copyHtmlButton = document.querySelector('#copyHtmlButton');
 const defaultAppButton = document.querySelector('#defaultAppButton');
 const minimizeButton = document.querySelector('#minimizeButton');
@@ -52,8 +50,6 @@ const maximizeButton = document.querySelector('#maximizeButton');
 const closeButton = document.querySelector('#closeButton');
 const themeButton = document.querySelector('#themeButton');
 const encodingSelect = document.querySelector('#encodingSelect');
-const encodingFooterSelect = document.querySelector('#encodingFooterSelect');
-const encodingEditorSelect = document.querySelector('#encodingEditorSelect');
 let currentFileBytes = null;
 let currentFilePath = null;
 document.title = 'Lumen';
@@ -247,8 +243,6 @@ function bytesToBase64(bytes) {
 
 function setEncoding(encoding, reload = true) {
   encodingSelect.value = encoding;
-  encodingFooterSelect.value = encoding;
-  encodingEditorSelect.value = encoding;
   try { localStorage.setItem('lumen-encoding', encoding); } catch (_) { /* storage may be disabled */ }
   if (reload && currentFileBytes) {
     const decoded = decodeBytes(currentFileBytes, encoding);
@@ -276,8 +270,6 @@ function setMode(mode) {
   documentPane.classList.toggle('split-mode', isSplit);
   editorToolbar.hidden = isPreview;
   copyHtmlButton.hidden = isEdit;
-  editorFooter.hidden = isPreview;
-  previewFooter.hidden = !isPreview;
   currentMode = mode;
   try { localStorage.setItem('lumen-mode', mode); } catch (_) { /* storage may be disabled */ }
   requestAnimationFrame(() => {
@@ -387,8 +379,6 @@ document.querySelector('#downloadButton').addEventListener('click', () => {
   else finish(bytesToBase64(new TextEncoder().encode(editor.value)));
 });
 encodingSelect.addEventListener('change', () => setEncoding(encodingSelect.value));
-encodingFooterSelect.addEventListener('change', () => setEncoding(encodingFooterSelect.value));
-encodingEditorSelect.addEventListener('change', () => setEncoding(encodingEditorSelect.value));
 copyHtmlButton.addEventListener('click', async () => {
   try { await navigator.clipboard.writeText(preview.innerHTML); showToast('HTML 已复制'); }
   catch (_) { showToast('无法访问剪贴板'); }

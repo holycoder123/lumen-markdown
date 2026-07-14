@@ -26,16 +26,6 @@
       <div class="document-name" id="documentName" title="点击重命名" tabindex="0">未命名文档.md</div>
       <div class="actions">
         <button class="button secondary theme-button" id="themeButton" type="button" title="切换 Dawn Light / Midnight Glow" aria-label="切换主题">☼</button>
-        <label class="encoding-control" for="encodingSelect">
-          <span>编码</span>
-          <select id="encodingSelect" title="选择文档编码" aria-label="选择文档编码">
-            <option value="utf-8">UTF-8</option>
-            <option value="gb18030">GB18030</option>
-            <option value="gbk">GBK</option>
-            <option value="utf-16le">UTF-16 LE</option>
-            <option value="utf-16be">UTF-16 BE</option>
-          </select>
-        </label>
         <input id="fileInput" type="file" accept=".md,.markdown,text/markdown,text/plain" hidden />
         <button class="button secondary" id="uploadButton" type="button">
           <span aria-hidden="true">↥</span> 上传文档
@@ -84,19 +74,9 @@
             <article class="markdown-body" id="preview"></article>
           </div>
         </div>
-        <footer class="pane-footer" id="editorFooter">
+        <footer class="pane-footer" id="documentFooter">
           <span id="saveStatus">已自动保存</span>
-          <span><b id="wordCount">0</b> 字符 · <b id="lineCount">1</b> 行 · 编码：<select id="encodingEditorSelect" aria-label="修改文件编码">
-            <option value="utf-8">UTF-8</option>
-            <option value="gb18030">GB18030</option>
-            <option value="gbk">GBK</option>
-            <option value="utf-16le">UTF-16 LE</option>
-            <option value="utf-16be">UTF-16 BE</option>
-          </select></span>
-        </footer>
-        <footer class="pane-footer preview-footer" id="previewFooter" hidden>
-          <span><span class="pulse"></span> 实时同步</span>
-          <span class="encoding-status">文件编码：<select id="encodingFooterSelect" aria-label="修改文件编码">
+          <span><b id="wordCount">0</b> 字符 · <b id="lineCount">1</b> 行 · 读取编码：<select id="encodingSelect" title="按所选编码重新读取文件" aria-label="修改读取编码">
             <option value="utf-8">UTF-8</option>
             <option value="gb18030">GB18030</option>
             <option value="gbk">GBK</option>
