@@ -81,9 +81,16 @@ function escapeHtml(value) {
 }
 
 function inline(text) {
-  let out = escapeHtml(text);
   const code = [];
-  out = out.replace(/`([^`]+)`/g, (_, value) => { code.push(`<code>${value}</code>`); return `\u0000CODE${code.length - 1}\u0000`; });
+  let prepared = text.replace(/`([^`]+)`/g, (_, value) => {
+    code.push(`<code>${escapeHtml(value)}</code>`);
+    return `\u0000CODE${code.length - 1}\u0000`;
+  });
+  const rawHtml = [];
+  let out = escapeHtml(prepared.replace(/<\/?[A-Za-z][^>\n]*>/g, tag => {
+    rawHtml.push(tag);
+    return `\u0000HTML${rawHtml.length - 1}\u0000`;
+  }));
   out = out.replace(/!\[([^\]]*)\]\((https?:\/\/[^\s)]+)\)/g, '<img src="$2" alt="$1" loading="lazy">');
   out = out.replace(/\[([^\]]+)\]\(([^)]+)\)/g, (_, label, rawTarget) => {
     const target = rawTarget.trim();
@@ -106,7 +113,64 @@ function inline(text) {
   out = out.replace(/(^|[^*])\*([^*\n]+)\*/g, '$1<em>$2</em>');
   out = out.replace(/~~([^~]+)~~/g, '<del>$1</del>');
   out = out.replace(/\u0000CODE(\d+)\u0000/g, (_, i) => code[Number(i)]);
+  out = out.replace(/\u0000HTML(\d+)\u0000/g, (_, i) => rawHtml[Number(i)]);
   return out;
+}
+
+const allowedHtmlTags = new Set([
+  'a', 'abbr', 'b', 'blockquote', 'br', 'center', 'cite', 'code', 'dd', 'del', 'details', 'div', 'dl', 'dt', 'em',
+  'figcaption', 'figure', 'h1', 'h2', 'h3', 'h4', 'h5', 'h6', 'hr', 'i', 'img', 'input', 'kbd', 'li', 'mark',
+  'ol', 'p', 'pre', 's', 'section', 'small', 'span', 'strong', 'sub', 'summary', 'sup', 'table', 'tbody', 'td',
+  'th', 'thead', 'tr', 'u', 'ul'
+]);
+const allowedHtmlAttributes = new Set(['align', 'alt', 'checked', 'colspan', 'disabled', 'height', 'open', 'rowspan', 'start', 'title', 'type', 'width']);
+
+function sanitizeRenderedHtml(html) {
+  const template = document.createElement('template');
+  template.innerHTML = html;
+  const elements = [...template.content.querySelectorAll('*')];
+  elements.forEach(element => {
+    const tag = element.tagName.toLowerCase();
+    if (!allowedHtmlTags.has(tag)) {
+      if (['script', 'style', 'iframe', 'object', 'embed'].includes(tag)) element.remove();
+      else element.replaceWith(...element.childNodes);
+      return;
+    }
+    [...element.attributes].forEach(attribute => {
+      const name = attribute.name.toLowerCase();
+      if (name === 'class') {
+        const safeClasses = attribute.value.split(/\s+/).filter(value => value === 'task' || value === 'table-wrap' || /^language-[\w-]+$/.test(value));
+        if (safeClasses.length) element.className = safeClasses.join(' ');
+        else element.removeAttribute('class');
+      } else if (name === 'style' && /^text-align\s*:\s*(left|center|right)\s*;?$/i.test(attribute.value)) {
+        element.style.textAlign = attribute.value.match(/(left|center|right)/i)[1].toLowerCase();
+      } else if (!allowedHtmlAttributes.has(name) && name !== 'href' && name !== 'src' && name !== 'data-local-path') {
+        element.removeAttribute(attribute.name);
+      }
+    });
+    if (tag === 'a') {
+      const href = element.getAttribute('href')?.trim() || '';
+      if (/^https?:\/\//i.test(href)) {
+        element.setAttribute('target', '_blank');
+        element.setAttribute('rel', 'noopener noreferrer');
+      } else if (href && href !== '#') {
+        element.setAttribute('href', '#');
+        element.dataset.localPath = href;
+      } else if (!element.dataset.localPath) {
+        element.removeAttribute('href');
+      }
+    }
+    if (tag === 'img') {
+      const src = element.getAttribute('src')?.trim() || '';
+      if (!/^(https?:\/\/|data:image\/)/i.test(src)) element.removeAttribute('src');
+      else element.setAttribute('loading', 'lazy');
+    }
+    if (tag === 'input') {
+      if (element.getAttribute('type')?.toLowerCase() !== 'checkbox') element.remove();
+      else element.disabled = true;
+    }
+  });
+  return template.innerHTML;
 }
 
 function splitTableRow(line) {
@@ -182,7 +246,12 @@ function renderMarkdown(source) {
     const item = line.match(/^\s*([-+*]|\d+[.)])\s+(.+)$/);
     if (item) {
       flushParagraph(); const nextType = /\d/.test(item[1]) ? 'ol' : 'ul';
-      if (listType !== nextType) { closeList(); html += `<${nextType}>`; listType = nextType; }
+      if (listType !== nextType) {
+        closeList();
+        const start = nextType === 'ol' ? Number.parseInt(item[1], 10) : 1;
+        html += nextType === 'ol' && start !== 1 ? `<ol start="${start}">` : `<${nextType}>`;
+        listType = nextType;
+      }
       const task = item[2].match(/^\[([ xX])\]\s+(.+)$/);
       html += task ? `<li class="task"><input type="checkbox" disabled ${task[1].toLowerCase() === 'x' ? 'checked' : ''}> ${inline(task[2])}</li>` : `<li>${inline(item[2])}</li>`;
       continue;
@@ -196,7 +265,7 @@ function renderMarkdown(source) {
 
 function update() {
   const value = editor.value;
-  preview.innerHTML = renderMarkdown(value);
+  preview.innerHTML = sanitizeRenderedHtml(renderMarkdown(value));
   const count = value.length;
   const lines = value.split('\n').length;
   wordCount.textContent = count.toLocaleString('zh-CN');
