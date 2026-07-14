@@ -104,8 +104,13 @@ button { color: inherit; }
 .toolbar { display: flex; gap: 3px; }
 .toolbar button, .icon-button { width: 30px; height: 30px; border: 0; border-radius: 8px; color: #8d9a97; background: transparent; cursor: pointer; transition: .18s; }
 .toolbar button:hover, .icon-button:hover { color: var(--ink); background: rgba(255,255,255,.1); box-shadow: inset 0 1px rgba(255,255,255,.1); }
-.view { flex: 1; min-height: 0; overflow: hidden; }
+.view-container { flex: 1; min-height: 0; display: flex; overflow: hidden; }
+.view { flex: 1; min-width: 0; min-height: 0; overflow: hidden; }
 .view.active { display: flex; }
+.document-pane.split-mode { width: 100%; }
+.document-pane.split-mode .view { flex: 1 1 50%; width: 50%; }
+.document-pane.split-mode #previewView { border-left: var(--glass-border); }
+.document-pane.split-mode .markdown-body { padding: 32px 36px 70px; }
 .editor-wrap { flex: 1; min-height: 0; display: grid; grid-template-columns: 54px 1fr; background: rgba(12,18,23,.2); overflow: hidden; }
 .line-numbers { padding: 26px 13px 80px 0; color: #64716e; background: rgba(0,0,0,.12); border-right: 1px solid rgba(255,255,255,.07); text-align: right; white-space: pre; overflow: hidden; user-select: none; font: 14px/1.7 ui-monospace, SFMono-Regular, Consolas, monospace; }
 #editor { width: 100%; height: 100%; resize: none; border: 0; outline: 0; padding: 26px 28px 80px; color: #dce5e2; background: transparent; caret-color: var(--accent); font: 14px/1.7 ui-monospace, SFMono-Regular, Consolas, monospace; tab-size: 2; }
@@ -249,4 +254,5 @@ button { color: inherit; }
 .mode-button.active#previewModeButton { color: var(--ink); }
 .mode-button.active#previewModeButton span { color: var(--green); }
 .mode-button.active#editModeButton span { color: var(--accent); }
+.mode-button.active#splitModeButton span { color: #76a7ff; }
 .window-mark { font-size: 0; background: url("assets/lumen-icon-generated.png") center / cover no-repeat !important; border-radius: 5px; box-shadow: none !important; }

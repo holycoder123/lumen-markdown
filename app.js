@@ -38,8 +38,10 @@ const dropOverlay = document.querySelector('#dropOverlay');
 const toast = document.querySelector('#toast');
 const editModeButton = document.querySelector('#editModeButton');
 const previewModeButton = document.querySelector('#previewModeButton');
+const splitModeButton = document.querySelector('#splitModeButton');
 const editorView = document.querySelector('#editorView');
 const previewView = document.querySelector('#previewView');
+const documentPane = document.querySelector('.document-pane');
 const editorToolbar = document.querySelector('#editorToolbar');
 const editorFooter = document.querySelector('#editorFooter');
 const previewFooter = document.querySelector('#previewFooter');
@@ -60,6 +62,7 @@ if (brandName) brandName.textContent = 'Lumen';
 let saveTimer;
 let scrollProgress = 0;
 let syncingScroll = false;
+let currentMode = 'preview';
 
 const savedTheme = (() => { try { return localStorage.getItem('lumen-theme') || 'light'; } catch (_) { return 'light'; } })();
 document.documentElement.dataset.theme = savedTheme;
@@ -255,29 +258,34 @@ function setEncoding(encoding, reload = true) {
 
 function setMode(mode) {
   const isEdit = mode === 'edit';
-  const outgoing = isEdit ? preview : editor;
+  const isPreview = mode === 'preview';
+  const isSplit = mode === 'split';
+  const outgoing = currentMode === 'preview' ? preview : editor;
   const outgoingRange = outgoing.scrollHeight - outgoing.clientHeight;
   if (outgoingRange > 0) scrollProgress = outgoing.scrollTop / outgoingRange;
   editModeButton.classList.toggle('active', isEdit);
-  previewModeButton.classList.toggle('active', !isEdit);
+  previewModeButton.classList.toggle('active', isPreview);
+  splitModeButton.classList.toggle('active', isSplit);
   editModeButton.setAttribute('aria-selected', String(isEdit));
-  previewModeButton.setAttribute('aria-selected', String(!isEdit));
-  editorView.hidden = !isEdit;
+  previewModeButton.setAttribute('aria-selected', String(isPreview));
+  splitModeButton.setAttribute('aria-selected', String(isSplit));
+  editorView.hidden = isPreview;
   previewView.hidden = isEdit;
-  editorView.classList.toggle('active', isEdit);
+  editorView.classList.toggle('active', !isPreview);
   previewView.classList.toggle('active', !isEdit);
-  editorToolbar.hidden = !isEdit;
+  documentPane.classList.toggle('split-mode', isSplit);
+  editorToolbar.hidden = isPreview;
   copyHtmlButton.hidden = isEdit;
-  editorFooter.hidden = !isEdit;
-  previewFooter.hidden = isEdit;
+  editorFooter.hidden = isPreview;
+  previewFooter.hidden = !isPreview;
+  currentMode = mode;
   try { localStorage.setItem('lumen-mode', mode); } catch (_) { /* storage may be disabled */ }
   requestAnimationFrame(() => {
-    const incoming = isEdit ? editor : preview;
-    const incomingRange = incoming.scrollHeight - incoming.clientHeight;
     syncingScroll = true;
-    incoming.scrollTop = Math.max(0, incomingRange) * scrollProgress;
+    if (!isPreview) editor.scrollTop = Math.max(0, editor.scrollHeight - editor.clientHeight) * scrollProgress;
+    if (!isEdit) preview.scrollTop = Math.max(0, preview.scrollHeight - preview.clientHeight) * scrollProgress;
     requestAnimationFrame(() => { syncingScroll = false; });
-    if (isEdit) editor.focus({ preventScroll: true });
+    if (!isPreview) editor.focus({ preventScroll: true });
   });
 }
 
@@ -305,12 +313,23 @@ editor.addEventListener('scroll', () => {
   if (!syncingScroll && !editorView.hidden) {
     const range = editor.scrollHeight - editor.clientHeight;
     scrollProgress = range > 0 ? editor.scrollTop / range : 0;
+    if (currentMode === 'split') {
+      syncingScroll = true;
+      preview.scrollTop = Math.max(0, preview.scrollHeight - preview.clientHeight) * scrollProgress;
+      requestAnimationFrame(() => { syncingScroll = false; });
+    }
   }
 });
 preview.addEventListener('scroll', () => {
   if (!syncingScroll && !previewView.hidden) {
     const range = preview.scrollHeight - preview.clientHeight;
     scrollProgress = range > 0 ? preview.scrollTop / range : 0;
+    if (currentMode === 'split') {
+      syncingScroll = true;
+      editor.scrollTop = Math.max(0, editor.scrollHeight - editor.clientHeight) * scrollProgress;
+      lineNumbers.scrollTop = editor.scrollTop;
+      requestAnimationFrame(() => { syncingScroll = false; });
+    }
   }
 });
 preview.addEventListener('click', event => {
@@ -376,6 +395,7 @@ copyHtmlButton.addEventListener('click', async () => {
 });
 editModeButton.addEventListener('click', () => setMode('edit'));
 previewModeButton.addEventListener('click', () => setMode('preview'));
+splitModeButton.addEventListener('click', () => setMode('split'));
 
 if (window.mojianDesktop?.setAsDefaultMarkdownApp) {
   defaultAppButton.hidden = false;
@@ -405,7 +425,7 @@ try {
 update();
 let initialMode = 'preview';
 try { initialMode = localStorage.getItem('lumen-mode') || 'preview'; } catch (_) { /* storage may be disabled */ }
-setMode(initialMode === 'preview' ? 'preview' : 'edit');
+setMode(['edit', 'preview', 'split'].includes(initialMode) ? initialMode : 'preview');
 
 if (window.mojianDesktop) {
   window.mojianDesktop.onOpenFile(file => {

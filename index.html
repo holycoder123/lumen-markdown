@@ -57,6 +57,9 @@
             <button class="mode-button active" id="previewModeButton" type="button" role="tab" aria-selected="true" aria-controls="previewView">
               <span aria-hidden="true">◉</span> 预览
             </button>
+            <button class="mode-button" id="splitModeButton" type="button" role="tab" aria-selected="false" aria-controls="editorView previewView">
+              <span aria-hidden="true">◫</span> 并列
+            </button>
           </div>
           <div class="header-tools">
             <div class="toolbar" id="editorToolbar" aria-label="编辑工具栏">
@@ -70,14 +73,16 @@
             <button class="icon-button copy-button" id="copyHtmlButton" type="button" title="复制 HTML" hidden>⧉</button>
           </div>
         </div>
-        <div class="view active" id="editorView" role="tabpanel" aria-labelledby="editModeButton">
-          <div class="editor-wrap">
-            <div class="line-numbers" id="lineNumbers" aria-hidden="true">1</div>
-            <textarea id="editor" spellcheck="false" aria-label="Markdown 内容"></textarea>
+        <div class="view-container">
+          <div class="view active" id="editorView" role="tabpanel" aria-labelledby="editModeButton">
+            <div class="editor-wrap">
+              <div class="line-numbers" id="lineNumbers" aria-hidden="true">1</div>
+              <textarea id="editor" spellcheck="false" aria-label="Markdown 内容"></textarea>
+            </div>
           </div>
-        </div>
-        <div class="view" id="previewView" role="tabpanel" aria-labelledby="previewModeButton" hidden>
-          <article class="markdown-body" id="preview"></article>
+          <div class="view" id="previewView" role="tabpanel" aria-labelledby="previewModeButton" hidden>
+            <article class="markdown-body" id="preview"></article>
+          </div>
         </div>
         <footer class="pane-footer" id="editorFooter">
           <span id="saveStatus">已自动保存</span>
