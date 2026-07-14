@@ -33,7 +33,7 @@ body::before {
 button, textarea { font: inherit; }
 button { color: inherit; }
 
-.app-shell { height: 100%; min-height: 620px; display: flex; flex-direction: column; overflow: hidden; border: 1px solid rgba(255,255,255,.16); border-radius: 18px; box-shadow: 0 30px 100px rgba(0,0,0,.48), inset 0 1px rgba(255,255,255,.12); }
+.app-shell { height: 100%; min-height: 620px; display: flex; flex-direction: column; overflow: hidden; border: 1px solid rgba(255,255,255,.16); border-radius: 0; box-shadow: 0 30px 100px rgba(0,0,0,.48), inset 0 1px rgba(255,255,255,.12); }
 .window-bar { height: 38px; flex: 0 0 auto; display: flex; align-items: center; justify-content: space-between; padding-left: 16px; background: rgba(9,15,20,.52); border-bottom: 1px solid rgba(255,255,255,.08); backdrop-filter: blur(18px) saturate(125%); -webkit-backdrop-filter: blur(18px) saturate(125%); -webkit-app-region: drag; }
 .window-brand { display: flex; align-items: center; gap: 8px; color: rgba(239,247,244,.82); font-size: 12px; font-weight: 650; letter-spacing: .02em; }
 .window-mark { width: 18px; height: 18px; display: grid; place-items: center; color: #1a2023; background: linear-gradient(145deg, #ffe0d6, var(--accent)); border-radius: 5px; font: 700 12px Georgia, serif; box-shadow: 0 0 14px rgba(255,139,115,.25); }
