@@ -53,13 +53,15 @@
         "ext": "md",
         "name": "Markdown Document",
         "description": "Markdown Document",
-        "role": "Editor"
+        "role": "Editor",
+        "icon": "assets/lumen-markdown-file.ico"
       },
       {
         "ext": "markdown",
         "name": "Markdown Document",
         "description": "Markdown Document",
-        "role": "Editor"
+        "role": "Editor",
+        "icon": "assets/lumen-markdown-file.ico"
       }
     ]
   },
