@@ -53,6 +53,7 @@ const encodingSelect = document.querySelector('#encodingSelect');
 const encodingFooterSelect = document.querySelector('#encodingFooterSelect');
 const encodingEditorSelect = document.querySelector('#encodingEditorSelect');
 let currentFileBytes = null;
+let currentFilePath = null;
 document.title = 'Lumen';
 const brandName = document.querySelector('.brand > span:nth-of-type(2)');
 if (brandName) brandName.textContent = 'Lumen';
@@ -85,12 +86,21 @@ function inline(text) {
   const code = [];
   out = out.replace(/`([^`]+)`/g, (_, value) => { code.push(`<code>${value}</code>`); return `\u0000CODE${code.length - 1}\u0000`; });
   out = out.replace(/!\[([^\]]*)\]\((https?:\/\/[^\s)]+)\)/g, '<img src="$2" alt="$1" loading="lazy">');
-  out = out.replace(/\[([^\]]+)\]\((https?:\/\/[^\s)]+)\)/g, '<a href="$2" target="_blank" rel="noopener noreferrer">$1</a>');
+  out = out.replace(/\[([^\]]+)\]\(([^)]+)\)/g, (_, label, rawTarget) => {
+    const target = rawTarget.trim();
+    if (/^https?:\/\//i.test(target)) return `<a href="${target}" target="_blank" rel="noopener noreferrer">${label}</a>`;
+    return `<a href="#" data-local-path="${target}">${label}</a>`;
+  });
   out = out.replace(/(^|[\s(>])((?:https?:\/\/|www\.)[^\s<]+)/gi, (_, prefix, value) => {
     const trailing = value.match(/[.,!?;:，。！？；：)\]]+$/)?.[0] || '';
     const address = value.slice(0, value.length - trailing.length);
     const href = address.toLowerCase().startsWith('www.') ? `https://${address}` : address;
     return `${prefix}<a href="${href}" target="_blank" rel="noopener noreferrer">${address}</a>${trailing}`;
+  });
+  out = out.replace(/(^|[\s(>])((?:[A-Za-z]:[\\/]|\\\\)[^\s<]+)/g, (_, prefix, value) => {
+    const trailing = value.match(/[.,!?;:，。！？；：)\]]+$/)?.[0] || '';
+    const target = value.slice(0, value.length - trailing.length);
+    return `${prefix}<a href="#" data-local-path="${target}">${target}</a>${trailing}`;
   });
   out = out.replace(/\*\*([^*]+)\*\*/g, '<strong>$1</strong>');
   out = out.replace(/__([^_]+)__/g, '<strong>$1</strong>');
@@ -279,6 +289,7 @@ function loadFile(file) {
   const reader = new FileReader();
   reader.onload = () => {
     currentFileBytes = new Uint8Array(reader.result);
+    currentFilePath = file.path || null;
     setEncoding(detectEncoding(currentFileBytes), false);
     const decoded = decodeBytes(currentFileBytes, encodingSelect.value);
     if (decoded === null) return;
@@ -305,6 +316,13 @@ preview.addEventListener('scroll', () => {
 preview.addEventListener('click', event => {
   const link = event.target.closest('a[href]');
   if (!link) return;
+  const localPath = link.dataset.localPath;
+  if (localPath) {
+    event.preventDefault();
+    if (window.mojianDesktop?.openLocalPath) window.mojianDesktop.openLocalPath(localPath, currentFilePath);
+    else showToast('本地文件链接需要在桌面版中打开');
+    return;
+  }
   const url = link.href;
   if (!/^https?:$/i.test(new URL(url).protocol)) return;
   event.preventDefault();
@@ -392,6 +410,7 @@ setMode(initialMode === 'preview' ? 'preview' : 'edit');
 if (window.mojianDesktop) {
   window.mojianDesktop.onOpenFile(file => {
     currentFileBytes = file.bytes ? base64ToBytes(file.bytes) : new TextEncoder().encode(file.content || '');
+    currentFilePath = file.path || null;
     setEncoding(detectEncoding(currentFileBytes), false);
     const decoded = decodeBytes(currentFileBytes, encodingSelect.value);
     if (decoded === null) return;

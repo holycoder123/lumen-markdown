@@ -53,6 +53,16 @@ ipcMain.handle('open-external-url', async (_event, value) => {
     return { opened: true };
   } catch (_) { return { opened: false }; }
 });
+ipcMain.handle('open-local-path', async (_event, value, sourceFile) => {
+  try {
+    let target = String(value || '');
+    if (/^file:\/\//i.test(target)) target = decodeURIComponent(new URL(target).pathname.replace(/^\/(\w):/, '$1:'));
+    const baseDir = sourceFile && /\.(md|markdown)$/i.test(sourceFile) ? path.dirname(sourceFile) : app.getPath('documents');
+    const resolved = path.isAbsolute(target) ? path.normalize(target) : path.resolve(baseDir, target);
+    const error = await shell.openPath(resolved);
+    return { opened: !error, error };
+  } catch (_) { return { opened: false }; }
+});
 ipcMain.on('window-minimize', () => mainWindow?.minimize());
 ipcMain.on('window-toggle-maximize', () => { if (mainWindow?.isMaximized()) mainWindow.unmaximize(); else mainWindow?.maximize(); });
 ipcMain.on('window-close', () => mainWindow?.close());
