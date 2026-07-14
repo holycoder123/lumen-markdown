@@ -54,14 +54,14 @@
         "name": "Markdown Document",
         "description": "Markdown Document",
         "role": "Editor",
-        "icon": "assets/lumen-markdown-file.ico"
+        "icon": "lumen-markdown-file.ico"
       },
       {
         "ext": "markdown",
         "name": "Markdown Document",
         "description": "Markdown Document",
         "role": "Editor",
-        "icon": "assets/lumen-markdown-file.ico"
+        "icon": "lumen-markdown-file.ico"
       }
     ]
   },
