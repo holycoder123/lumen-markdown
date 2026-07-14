@@ -86,6 +86,12 @@ function inline(text) {
   out = out.replace(/`([^`]+)`/g, (_, value) => { code.push(`<code>${value}</code>`); return `\u0000CODE${code.length - 1}\u0000`; });
   out = out.replace(/!\[([^\]]*)\]\((https?:\/\/[^\s)]+)\)/g, '<img src="$2" alt="$1" loading="lazy">');
   out = out.replace(/\[([^\]]+)\]\((https?:\/\/[^\s)]+)\)/g, '<a href="$2" target="_blank" rel="noopener noreferrer">$1</a>');
+  out = out.replace(/(^|[\s(>])((?:https?:\/\/|www\.)[^\s<]+)/gi, (_, prefix, value) => {
+    const trailing = value.match(/[.,!?;:，。！？；：)\]]+$/)?.[0] || '';
+    const address = value.slice(0, value.length - trailing.length);
+    const href = address.toLowerCase().startsWith('www.') ? `https://${address}` : address;
+    return `${prefix}<a href="${href}" target="_blank" rel="noopener noreferrer">${address}</a>${trailing}`;
+  });
   out = out.replace(/\*\*([^*]+)\*\*/g, '<strong>$1</strong>');
   out = out.replace(/__([^_]+)__/g, '<strong>$1</strong>');
   out = out.replace(/(^|[^*])\*([^*\n]+)\*/g, '$1<em>$2</em>');
