@@ -302,6 +302,15 @@ preview.addEventListener('scroll', () => {
     scrollProgress = range > 0 ? preview.scrollTop / range : 0;
   }
 });
+preview.addEventListener('click', event => {
+  const link = event.target.closest('a[href]');
+  if (!link) return;
+  const url = link.href;
+  if (!/^https?:$/i.test(new URL(url).protocol)) return;
+  event.preventDefault();
+  if (window.mojianDesktop?.openExternalUrl) window.mojianDesktop.openExternalUrl(url);
+  else window.open(url, '_blank', 'noopener,noreferrer');
+});
 editor.addEventListener('keydown', event => {
   if (event.key === 'Tab') { event.preventDefault(); const s = editor.selectionStart; editor.setRangeText('  ', s, editor.selectionEnd, 'end'); update(); }
   if ((event.ctrlKey || event.metaKey) && ['b', 'i'].includes(event.key.toLowerCase())) {

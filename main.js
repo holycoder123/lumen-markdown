@@ -45,6 +45,14 @@ ipcMain.handle('encode-text', (_event, { text, encoding }) => {
   if (!iconv.encodingExists(normalized)) throw new Error(`不支持的编码：${normalized}`);
   return iconv.encode(String(text ?? ''), normalized).toString('base64');
 });
+ipcMain.handle('open-external-url', async (_event, value) => {
+  try {
+    const url = new URL(String(value));
+    if (!['http:', 'https:'].includes(url.protocol)) return { opened: false };
+    await shell.openExternal(url.toString());
+    return { opened: true };
+  } catch (_) { return { opened: false }; }
+});
 ipcMain.on('window-minimize', () => mainWindow?.minimize());
 ipcMain.on('window-toggle-maximize', () => { if (mainWindow?.isMaximized()) mainWindow.unmaximize(); else mainWindow?.maximize(); });
 ipcMain.on('window-close', () => mainWindow?.close());
