@@ -131,6 +131,11 @@ button { color: inherit; }
 .markdown-body summary { cursor: pointer; font-weight: 700; }
 .markdown-body pre { overflow: auto; padding: 18px; color: #e8efec; background: rgba(4,8,11,.62); border: 1px solid rgba(255,255,255,.09); border-radius: 12px; line-height: 1.55; box-shadow: inset 0 1px rgba(255,255,255,.06), 0 12px 30px rgba(0,0,0,.15); }
 .markdown-body pre code { padding: 0; color: inherit; background: none; }
+.markdown-body .flowchart-diagram { margin: 1.2em 0; padding: 18px; overflow: auto; border: 1px solid var(--line); border-radius: 12px; background: rgba(4,8,11,.28); }
+.markdown-body .flowchart-diagram svg { display: block; min-width: max-content; margin: 0 auto; }
+.markdown-body .mermaid-diagram { margin: 1.2em 0; padding: 18px; overflow: auto; border: 1px solid var(--line); border-radius: 12px; background: rgba(4,8,11,.28); }
+.markdown-body .mermaid-diagram svg { display: block; min-width: max-content; margin: 0 auto; }
+.markdown-body .flowchart-error { color: #e36d5c; font-family: ui-monospace, Consolas, monospace; white-space: pre-wrap; }
 .markdown-body img { max-width: 100%; border-radius: 10px; box-shadow: 0 14px 36px rgba(0,0,0,.22); }
 .markdown-body hr { margin: 2em 0; border: 0; border-top: 1px solid var(--line); }
 .markdown-body .table-wrap { width: 100%; margin: 1.2em 0; overflow-x: auto; border: 1px solid var(--line); border-radius: 10px; }
@@ -237,6 +242,8 @@ button { color: inherit; }
 :root[data-theme="light"] .markdown-body code { color: #b34d3c; background: #f1efe8; }
 :root[data-theme="light"] .markdown-body pre { color: #303236; background: #f1efe8; border-color: rgba(212,168,83,.42); box-shadow: inset 0 1px rgba(255,255,255,.9), 0 10px 24px rgba(61,56,43,.08); }
 :root[data-theme="light"] .markdown-body pre code { color: #303236; }
+:root[data-theme="light"] .markdown-body .flowchart-diagram { background: #f8f7f3; border-color: #e8e5de; }
+:root[data-theme="light"] .markdown-body .mermaid-diagram { background: #f8f7f3; border-color: #e8e5de; }
 :root[data-theme="light"] .markdown-body th { color: #202124; background: #f4f3ef; }
 :root[data-theme="light"] .markdown-body tbody tr:nth-child(even) { background: rgba(244,243,239,.55); }
 :root[data-theme="light"] .markdown-body tbody tr:hover { background: rgba(212,168,83,.09); }

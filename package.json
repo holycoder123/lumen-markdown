@@ -7,12 +7,17 @@
   "scripts": {
     "start": "electron .",
     "dev": "electron .",
+    "build:flowchart": "browserify node_modules/flowchart.js/index.js --standalone flowchart -o assets/flowchart.js",
+    "build:mermaid": "copy node_modules\\mermaid\\dist\\mermaid.min.js assets\\mermaid.min.js",
     "dist": "powershell -NoProfile -ExecutionPolicy Bypass -File scripts/build-windows.ps1",
     "package": "powershell -NoProfile -ExecutionPolicy Bypass -File scripts/build-windows.ps1"
   },
   "devDependencies": {
+    "browserify": "^17.0.1",
     "electron": "^38.0.0",
-    "electron-builder": "^26.0.0"
+    "electron-builder": "^26.0.0",
+    "flowchart.js": "^1.18.0",
+    "mermaid": "^11.16.0"
   },
   "build": {
     "appId": "com.lumen.markdowneditor",

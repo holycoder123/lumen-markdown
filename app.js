@@ -59,6 +59,7 @@ let saveTimer;
 let scrollProgress = 0;
 let syncingScroll = false;
 let currentMode = 'preview';
+let mermaidRenderId = 0;
 
 const savedTheme = (() => { try { return localStorage.getItem('lumen-theme') || 'light'; } catch (_) { return 'light'; } })();
 document.documentElement.dataset.theme = savedTheme;
@@ -68,6 +69,7 @@ themeButton.addEventListener('click', () => {
   document.documentElement.dataset.theme = nextTheme;
   themeButton.textContent = nextTheme === 'dark' ? '☼' : '☾';
   try { localStorage.setItem('lumen-theme', nextTheme); } catch (_) { /* storage may be disabled */ }
+  update();
 });
 
 if (window.mojianDesktop?.minimize) {
@@ -139,12 +141,12 @@ function sanitizeRenderedHtml(html) {
     [...element.attributes].forEach(attribute => {
       const name = attribute.name.toLowerCase();
       if (name === 'class') {
-        const safeClasses = attribute.value.split(/\s+/).filter(value => value === 'task' || value === 'table-wrap' || /^language-[\w-]+$/.test(value));
+        const safeClasses = attribute.value.split(/\s+/).filter(value => value === 'task' || value === 'table-wrap' || value === 'flowchart-diagram' || value === 'mermaid-diagram' || /^language-[\w-]+$/.test(value));
         if (safeClasses.length) element.className = safeClasses.join(' ');
         else element.removeAttribute('class');
       } else if (name === 'style' && /^text-align\s*:\s*(left|center|right)\s*;?$/i.test(attribute.value)) {
         element.style.textAlign = attribute.value.match(/(left|center|right)/i)[1].toLowerCase();
-      } else if (!allowedHtmlAttributes.has(name) && name !== 'href' && name !== 'src' && name !== 'data-local-path') {
+      } else if (!allowedHtmlAttributes.has(name) && name !== 'href' && name !== 'src' && name !== 'data-local-path' && name !== 'data-flowchart-source') {
         element.removeAttribute(attribute.name);
       }
     });
@@ -212,7 +214,16 @@ function renderMarkdown(source) {
     const fence = line.match(/^```\s*([\w-]*)/);
     if (fence) {
       if (!inCode) { flushParagraph(); closeList(); closeQuote(); inCode = true; codeLang = fence[1]; codeLines = []; }
-      else { html += `<pre><code${codeLang ? ` class="language-${escapeHtml(codeLang)}"` : ''}>${escapeHtml(codeLines.join('\n'))}</code></pre>`; inCode = false; }
+      else {
+        const code = codeLines.join('\n');
+        const language = codeLang.toLowerCase();
+        html += language === 'flowchart'
+          ? `<div class="flowchart-diagram" data-flowchart-source="${escapeHtml(encodeURIComponent(code))}"></div>`
+          : language === 'mermaid'
+            ? `<div class="mermaid-diagram" data-flowchart-source="${escapeHtml(encodeURIComponent(code))}"></div>`
+            : `<pre><code${codeLang ? ` class="language-${escapeHtml(codeLang)}"` : ''}>${escapeHtml(code)}</code></pre>`;
+        inCode = false;
+      }
       continue;
     }
     if (inCode) { codeLines.push(line); continue; }
@@ -258,14 +269,85 @@ function renderMarkdown(source) {
     }
     closeList(); paragraph.push(line.trim());
   }
-  if (inCode) html += `<pre><code>${escapeHtml(codeLines.join('\n'))}</code></pre>`;
+  if (inCode) {
+    const code = codeLines.join('\n');
+    const language = codeLang.toLowerCase();
+    html += language === 'flowchart'
+      ? `<div class="flowchart-diagram" data-flowchart-source="${escapeHtml(encodeURIComponent(code))}"></div>`
+      : language === 'mermaid'
+        ? `<div class="mermaid-diagram" data-flowchart-source="${escapeHtml(encodeURIComponent(code))}"></div>`
+        : `<pre><code>${escapeHtml(code)}</code></pre>`;
+  }
   flushParagraph(); closeList(); closeQuote();
   return html;
+}
+
+function renderFlowcharts() {
+  preview.querySelectorAll('.flowchart-diagram').forEach(container => {
+    const source = container.dataset.flowchartSource;
+    if (!source) return;
+    try {
+      if (!window.flowchart) throw new Error('流程图库未加载');
+      container.removeAttribute('data-flowchart-source');
+      window.flowchart.parse(decodeURIComponent(source)).drawSVG(container, {
+        'line-width': 2,
+        'line-length': 38,
+        'text-margin': 10,
+        'font-size': 15,
+        'font-color': document.documentElement.dataset.theme === 'dark' ? '#e8efec' : '#303236',
+        'line-color': document.documentElement.dataset.theme === 'dark' ? '#9db2aa' : '#66706d',
+        'element-color': document.documentElement.dataset.theme === 'dark' ? '#9db2aa' : '#66706d',
+        'fill': document.documentElement.dataset.theme === 'dark' ? '#182329' : '#ffffff',
+        'yes-text': '是',
+        'no-text': '否',
+        'arrow-end': 'block',
+        'scale': 1
+      });
+    } catch (error) {
+      container.classList.add('flowchart-error');
+      container.textContent = `流程图渲染失败：${error.message}`;
+    }
+  });
+}
+
+async function renderMermaidDiagrams() {
+  const containers = preview.querySelectorAll('.mermaid-diagram');
+  if (!containers.length) return;
+  if (!window.mermaid) {
+    containers.forEach(container => {
+      container.classList.add('flowchart-error');
+      container.textContent = '流程图渲染失败：Mermaid 未加载';
+    });
+    return;
+  }
+  window.mermaid.initialize({
+    startOnLoad: false,
+    securityLevel: 'strict',
+    theme: document.documentElement.dataset.theme === 'dark' ? 'dark' : 'default'
+  });
+  containers.forEach(async container => {
+    const source = container.dataset.flowchartSource;
+    if (!source) return;
+    try {
+      const id = `lumen-mermaid-${++mermaidRenderId}`;
+      const result = await window.mermaid.render(id, decodeURIComponent(source));
+      if (!container.isConnected) return;
+      container.removeAttribute('data-flowchart-source');
+      container.innerHTML = result.svg;
+      result.bindFunctions?.(container);
+    } catch (error) {
+      if (!container.isConnected) return;
+      container.classList.add('flowchart-error');
+      container.textContent = `流程图渲染失败：${error.message}`;
+    }
+  });
 }
 
 function update() {
   const value = editor.value;
   preview.innerHTML = sanitizeRenderedHtml(renderMarkdown(value));
+  renderFlowcharts();
+  renderMermaidDiagrams();
   const count = value.length;
   const lines = value.split('\n').length;
   wordCount.textContent = count.toLocaleString('zh-CN');
