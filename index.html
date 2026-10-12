@@ -26,9 +26,12 @@
       <div class="document-name" id="documentName" title="点击重命名" tabindex="0">未命名文档.md</div>
       <div class="actions">
         <button class="button secondary theme-button" id="themeButton" type="button" title="切换 Dawn Light / Midnight Glow" aria-label="切换主题">☼</button>
-        <input id="fileInput" type="file" accept=".md,.markdown,text/markdown,text/plain" hidden />
+        <button class="button secondary" id="newDocumentButton" type="button" title="新建文档 (Ctrl+N)">
+          <span aria-hidden="true">＋</span> 新建文档
+        </button>
+        <input id="fileInput" type="file" accept=".md,.markdown,text/markdown,text/plain" multiple hidden />
         <button class="button secondary" id="uploadButton" type="button">
-          <span aria-hidden="true">↥</span> 上传文档
+          <span aria-hidden="true">↥</span> 打开文档
         </button>
         <button class="button primary" id="downloadButton" type="button">
           <span aria-hidden="true">↓</span> 导出 .md
@@ -38,7 +41,11 @@
     </header>
 
     <main class="workspace" id="dropZone">
-      <section class="pane document-pane" aria-label="Markdown 编辑与预览面板">
+      <section class="pane document-pane" id="documentPanel" role="tabpanel" aria-label="Markdown 编辑与预览面板">
+        <div class="document-tabs-bar">
+          <div class="document-tabs" id="documentTabs" role="tablist" aria-label="打开的文档"></div>
+          <span class="document-count" id="documentCount" aria-live="polite">1 个文档</span>
+        </div>
         <div class="pane-header">
           <div class="mode-switch" role="tablist" aria-label="视图模式">
             <button class="mode-button" id="editModeButton" type="button" role="tab" aria-selected="false" aria-controls="editorView">
@@ -52,7 +59,7 @@
             </button>
           </div>
           <div class="header-tools">
-            <div class="toolbar" id="editorToolbar" aria-label="编辑工具栏">
+            <div class="toolbar" id="editorToolbar" aria-label="编辑工具栏" hidden>
               <button data-wrap="**" title="粗体 (Ctrl+B)"><b>B</b></button>
               <button data-wrap="*" title="斜体 (Ctrl+I)"><i>I</i></button>
               <button data-prefix="## " title="标题">H</button>
@@ -60,18 +67,20 @@
               <button data-wrap="`" title="行内代码">&lt;/&gt;</button>
               <button data-prefix="- " title="无序列表">☷</button>
               <button data-prefix="1. " title="有序列表">1.</button>
+              <button id="insertImageButton" type="button" title="插入图片" aria-label="插入图片">▧</button>
+              <input id="imageInput" type="file" accept="image/png,image/jpeg,image/gif,image/webp,image/avif,image/bmp,image/svg+xml" hidden />
             </div>
-            <button class="icon-button copy-button" id="copyHtmlButton" type="button" title="复制 HTML" hidden>⧉</button>
+            <button class="icon-button copy-button" id="copyHtmlButton" type="button" title="复制 HTML">⧉</button>
           </div>
         </div>
         <div class="view-container">
-          <div class="view active" id="editorView" role="tabpanel" aria-labelledby="editModeButton">
+          <div class="view" id="editorView" role="tabpanel" aria-labelledby="editModeButton" hidden>
             <div class="editor-wrap">
               <div class="line-numbers" id="lineNumbers" aria-hidden="true">1</div>
-              <textarea id="editor" spellcheck="false" aria-label="Markdown 内容"></textarea>
+              <textarea id="editor" spellcheck="false" aria-label="Markdown 内容" placeholder="输入 Markdown，或从工具栏插入图片…"></textarea>
             </div>
           </div>
-          <div class="view" id="previewView" role="tabpanel" aria-labelledby="previewModeButton" hidden>
+          <div class="view active" id="previewView" role="tabpanel" aria-labelledby="previewModeButton">
             <article class="markdown-body" id="preview"></article>
           </div>
         </div>
@@ -88,7 +97,7 @@
       </section>
 
       <div class="drop-overlay" id="dropOverlay">
-        <div><span>↥</span><strong>松开以上传 Markdown 文档</strong><small>支持 .md 和 .markdown</small></div>
+        <div><span>↥</span><strong>松开以打开 Markdown 文档</strong><small>支持 .md 和 .markdown</small></div>
       </div>
     </main>
   </div>

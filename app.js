@@ -1,6 +1,6 @@
 const starter = `# 欢迎使用 Lumen
 
-一款轻盈、专注的 **Markdown 编辑器**。你的内容会实时呈现在右侧，并自动保存在当前浏览器中。
+一款轻盈、专注的 **Markdown 编辑器**。文档会自动保存在本机，打开软件即可阅读预览。
 
 ## 开始书写
 
@@ -23,7 +23,7 @@ console.log(greeting);
 
 ---
 
-将本地 **.md** 文件拖到窗口，或点击右上角「上传文档」即可开始。
+点击「新建文档」开始书写，或点击「打开文档」一次打开多个 **.md** 文件。通过上方标签切换文档，编辑时可从工具栏插入图片。
 `;
 
 const editor = document.querySelector('#editor');
@@ -50,6 +50,13 @@ const maximizeButton = document.querySelector('#maximizeButton');
 const closeButton = document.querySelector('#closeButton');
 const themeButton = document.querySelector('#themeButton');
 const encodingSelect = document.querySelector('#encodingSelect');
+const documentTabs = document.querySelector('#documentTabs');
+const documentCount = document.querySelector('#documentCount');
+const imageInput = document.querySelector('#imageInput');
+const documentsStorageKey = 'lumen-documents-v1';
+const supportedEncodings = new Set(['utf-8', 'gb18030', 'gbk', 'utf-16le', 'utf-16be']);
+let documents = [];
+let activeDocumentId = null;
 let currentFileBytes = null;
 let currentFilePath = null;
 document.title = 'Lumen';
@@ -60,6 +67,138 @@ let scrollProgress = 0;
 let syncingScroll = false;
 let currentMode = 'preview';
 let mermaidRenderId = 0;
+const imageUrlCache = new Map();
+
+function createDocument({ name, content = '', encoding = 'utf-8', path = null, bytes = null, id } = {}) {
+  if (!name) {
+    let number = 1;
+    do { name = number === 1 ? '未命名文档.md' : `未命名文档 ${number}.md`; number++; }
+    while (documents.some(document => document.name === name));
+  }
+  return { id: id || crypto.randomUUID(), name, content, encoding, path, bytes, scroll: 0, selectionStart: 0, selectionEnd: 0 };
+}
+
+function activeDocument() { return documents.find(document => document.id === activeDocumentId); }
+
+function captureDocument() {
+  const document = activeDocument();
+  if (!document) return;
+  document.content = editor.value;
+  document.name = documentName.textContent.trim() || '未命名文档.md';
+  document.encoding = encodingSelect.value;
+  document.bytes = currentFileBytes;
+  document.scroll = scrollProgress;
+  document.selectionStart = editor.selectionStart;
+  document.selectionEnd = editor.selectionEnd;
+}
+
+function saveDocuments() {
+  clearTimeout(saveTimer);
+  captureDocument();
+  try {
+    localStorage.setItem(documentsStorageKey, JSON.stringify({
+      version: 1,
+      activeId: activeDocumentId,
+      documents: documents.map(({ id, name, content, encoding, path }) => ({ id, name, content, encoding, path }))
+    }));
+    saveStatus.textContent = '已自动保存';
+  } catch (error) {
+    saveStatus.textContent = error.name === 'QuotaExceededError' ? '存储空间不足，请导出文档' : '自动保存失败，请导出文档';
+  }
+}
+
+function renderDocumentTabs() {
+  documentTabs.replaceChildren();
+  documents.forEach(document => {
+    const button = window.document.createElement('button');
+    button.type = 'button';
+    button.className = 'document-tab';
+    button.id = `doc-tab-${document.id}`;
+    button.dataset.documentId = document.id;
+    button.textContent = document.name;
+    button.title = document.path || document.name;
+    button.setAttribute('role', 'tab');
+    button.setAttribute('aria-controls', 'documentPanel');
+    button.setAttribute('aria-selected', String(document.id === activeDocumentId));
+    button.tabIndex = document.id === activeDocumentId ? 0 : -1;
+    documentTabs.append(button);
+  });
+  documentCount.textContent = `${documents.length} 个文档`;
+  documentPane.setAttribute('aria-labelledby', `doc-tab-${activeDocumentId}`);
+}
+
+function revealActiveTab() {
+  documentTabs.querySelector('[aria-selected="true"]')?.scrollIntoView({ block: 'nearest', inline: 'nearest' });
+}
+
+function activateDocument(id, mode = currentMode) {
+  const next = documents.find(document => document.id === id);
+  if (!next) return;
+  if (documentName.isContentEditable) documentName.blur();
+  captureDocument();
+  activeDocumentId = id;
+  editor.value = next.content;
+  documentName.textContent = next.name;
+  currentFileBytes = next.bytes;
+  currentFilePath = next.path;
+  encodingSelect.value = next.encoding;
+  scrollProgress = next.scroll;
+  editor.setSelectionRange(next.selectionStart, next.selectionEnd);
+  update();
+  renderDocumentTabs();
+  setMode(mode, false);
+  revealActiveTab();
+}
+
+function newDocument() {
+  const document = createDocument();
+  documents.push(document);
+  activateDocument(document.id, 'edit');
+  saveDocuments();
+  showToast('已新建文档');
+}
+
+function openDocument({ name, content, encoding, path, bytes }) {
+  const normalizedPath = path ? path.replace(/\\/g, '/').toLowerCase() : null;
+  const existing = normalizedPath && documents.find(document => document.path?.replace(/\\/g, '/').toLowerCase() === normalizedPath);
+  if (existing) { activateDocument(existing.id, 'preview'); return; }
+  const document = createDocument({ name, content, encoding, path, bytes });
+  documents.push(document);
+  activateDocument(document.id, 'preview');
+}
+
+function restoreDocuments() {
+  try {
+    const stored = JSON.parse(localStorage.getItem(documentsStorageKey) || 'null');
+    if (stored?.version === 1 && Array.isArray(stored.documents)) {
+      const ids = new Set();
+      documents = stored.documents.filter(document => {
+        if (!document || typeof document.id !== 'string' || ids.has(document.id) || typeof document.name !== 'string' || typeof document.content !== 'string') return false;
+        ids.add(document.id);
+        return true;
+      }).map(document => createDocument({
+        ...document,
+        encoding: supportedEncodings.has(document.encoding) ? document.encoding : 'utf-8',
+        path: typeof document.path === 'string' ? document.path : null,
+        bytes: null
+      }));
+      if (documents.length) {
+        activateDocument(documents.some(document => document.id === stored.activeId) ? stored.activeId : documents[0].id, 'preview');
+        return;
+      }
+    }
+  } catch (_) { /* Fall back to the previous single-document draft. */ }
+  let content = starter, name = '欢迎使用 Lumen.md', encoding = 'utf-8';
+  try {
+    const legacy = localStorage.getItem('mojian-content');
+    if (legacy !== null) { content = legacy; name = localStorage.getItem('mojian-name') || '未命名文档.md'; }
+    const savedEncoding = localStorage.getItem('lumen-encoding');
+    if (supportedEncodings.has(savedEncoding)) encoding = savedEncoding;
+  } catch (_) { /* Storage may be unavailable. */ }
+  const document = createDocument({ name, content, encoding });
+  documents.push(document);
+  activateDocument(document.id, 'preview');
+}
 
 const savedTheme = (() => { try { return localStorage.getItem('lumen-theme') || 'light'; } catch (_) { return 'light'; } })();
 document.documentElement.dataset.theme = savedTheme;
@@ -82,18 +221,45 @@ function escapeHtml(value) {
   return value.replace(/[&<>"']/g, c => ({ '&':'&amp;', '<':'&lt;', '>':'&gt;', '"':'&quot;', "'":'&#39;' })[c]);
 }
 
+function extractImages(text, images) {
+  const pattern = /!\[([^\]\n]*)\]\(/g;
+  let output = '', offset = 0, match;
+  while ((match = pattern.exec(text))) {
+    let end = pattern.lastIndex, depth = 1, angle = false;
+    for (; end < text.length; end++) {
+      if (!angle && text[end] === '\\' && /[()]/.test(text[end + 1] || '')) { end++; continue; }
+      if (text[end] === '<') angle = true;
+      if (text[end] === '>') angle = false;
+      if (!angle && text[end] === '(') depth++;
+      if (!angle && text[end] === ')' && --depth === 0) break;
+      if (text[end] === '\n') break;
+    }
+    if (depth !== 0) continue;
+    const destination = text.slice(pattern.lastIndex, end).trim();
+    const parts = destination.match(/^<([^>]+)>(?:\s+["'](.*)["'])?$/) || destination.match(/^(.+?)(?:\s+["'](.*)["'])?$/);
+    if (!parts) continue;
+    const source = /^(?:[a-z]:[\\/]|\\\\)/i.test(parts[1]) ? parts[1] : parts[1].replace(/\\([()])/g, '$1');
+    images.push(`<img src="${escapeHtml(source)}" alt="${escapeHtml(match[1])}"${parts[2] ? ` title="${escapeHtml(parts[2])}"` : ''}>`);
+    output += text.slice(offset, match.index) + `\u0000IMAGE${images.length - 1}\u0000`;
+    offset = end + 1;
+    pattern.lastIndex = offset;
+  }
+  return output + text.slice(offset);
+}
+
 function inline(text) {
   const code = [];
   let prepared = text.replace(/`([^`]+)`/g, (_, value) => {
     code.push(`<code>${escapeHtml(value)}</code>`);
     return `\u0000CODE${code.length - 1}\u0000`;
   });
+  const images = [];
+  prepared = extractImages(prepared, images);
   const rawHtml = [];
   let out = escapeHtml(prepared.replace(/<\/?[A-Za-z][^>\n]*>/g, tag => {
     rawHtml.push(tag);
     return `\u0000HTML${rawHtml.length - 1}\u0000`;
   }));
-  out = out.replace(/!\[([^\]]*)\]\((https?:\/\/[^\s)]+)\)/g, '<img src="$2" alt="$1" loading="lazy">');
   out = out.replace(/\[([^\]]+)\]\(([^)]+)\)/g, (_, label, rawTarget) => {
     const target = rawTarget.trim();
     if (/^https?:\/\//i.test(target)) return `<a href="${target}" target="_blank" rel="noopener noreferrer">${label}</a>`;
@@ -116,6 +282,7 @@ function inline(text) {
   out = out.replace(/~~([^~]+)~~/g, '<del>$1</del>');
   out = out.replace(/\u0000CODE(\d+)\u0000/g, (_, i) => code[Number(i)]);
   out = out.replace(/\u0000HTML(\d+)\u0000/g, (_, i) => rawHtml[Number(i)]);
+  out = out.replace(/\u0000IMAGE(\d+)\u0000/g, (_, i) => images[Number(i)]);
   return out;
 }
 
@@ -164,8 +331,9 @@ function sanitizeRenderedHtml(html) {
     }
     if (tag === 'img') {
       const src = element.getAttribute('src')?.trim() || '';
-      if (!/^(https?:\/\/|data:image\/)/i.test(src)) element.removeAttribute('src');
-      else element.setAttribute('loading', 'lazy');
+      element.removeAttribute('src');
+      element.dataset.imageSource = src;
+      element.setAttribute('loading', 'lazy');
     }
     if (tag === 'input') {
       if (element.getAttribute('type')?.toLowerCase() !== 'checkbox') element.remove();
@@ -173,6 +341,44 @@ function sanitizeRenderedHtml(html) {
     }
   });
   return template.innerHTML;
+}
+
+function imagePlaceholder(image, source) {
+  if (!image.isConnected) return;
+  const placeholder = document.createElement('span');
+  placeholder.className = 'image-placeholder';
+  placeholder.setAttribute('role', 'status');
+  placeholder.textContent = `图片无法显示：${image.alt || (source.startsWith('data:') ? '插入的图片' : source) || '图片地址为空'}`;
+  image.replaceWith(placeholder);
+}
+
+function resolvePreviewImages() {
+  const sourceFile = currentFilePath;
+  preview.querySelectorAll('img[data-image-source]').forEach(async image => {
+    const source = image.dataset.imageSource;
+    image.removeAttribute('data-image-source');
+    image.addEventListener('error', () => imagePlaceholder(image, source), { once: true });
+    let url = null;
+    try {
+      if (/^https?:\/\//i.test(source)) {
+        const parsed = new URL(source);
+        if (['http:', 'https:'].includes(parsed.protocol)) url = parsed.href;
+      } else if (/^data:image\/(?:png|jpe?g|gif|webp|avif|bmp|svg\+xml|x-icon|vnd\.microsoft\.icon|apng)(?:;[^,]*)?,/i.test(source)) {
+        url = source;
+      } else if (window.mojianDesktop?.resolveImageUrl) {
+        const key = JSON.stringify([sourceFile, source]);
+        if (!imageUrlCache.has(key)) {
+          if (imageUrlCache.size > 200) imageUrlCache.clear();
+          imageUrlCache.set(key, window.mojianDesktop.resolveImageUrl(source, sourceFile));
+        }
+        url = await imageUrlCache.get(key);
+        if (!url) imageUrlCache.delete(key);
+      }
+    } catch (_) { /* Show a placeholder when the image cannot be resolved. */ }
+    if (!image.isConnected) return;
+    if (url) image.src = url;
+    else imagePlaceholder(image, source);
+  });
 }
 
 function splitTableRow(line) {
@@ -345,7 +551,11 @@ async function renderMermaidDiagrams() {
 
 function update() {
   const value = editor.value;
-  preview.innerHTML = sanitizeRenderedHtml(renderMarkdown(value));
+  const previousName = activeDocument()?.name;
+  captureDocument();
+  if (previousName !== activeDocument()?.name) renderDocumentTabs();
+  preview.innerHTML = value.trim() ? sanitizeRenderedHtml(renderMarkdown(value)) : '<div class="preview-empty"><strong>这份文档还是空白的</strong><p>点击「编辑」开始书写，或在编辑工具栏中插入图片。</p></div>';
+  resolvePreviewImages();
   renderFlowcharts();
   renderMermaidDiagrams();
   const count = value.length;
@@ -355,11 +565,7 @@ function update() {
   lineNumbers.textContent = Array.from({ length: lines }, (_, i) => i + 1).join('\n');
   saveStatus.textContent = '正在保存…';
   clearTimeout(saveTimer);
-  saveTimer = setTimeout(() => {
-    try { localStorage.setItem('mojian-content', value); localStorage.setItem('mojian-name', documentName.textContent); }
-    catch (_) { /* storage may be disabled */ }
-    saveStatus.textContent = '已自动保存';
-  }, 350);
+  saveTimer = setTimeout(saveDocuments, 350);
 }
 
 function showToast(message) {
@@ -393,21 +599,24 @@ function bytesToBase64(bytes) {
 }
 
 function setEncoding(encoding, reload = true) {
+  if (!supportedEncodings.has(encoding)) return;
   encodingSelect.value = encoding;
   try { localStorage.setItem('lumen-encoding', encoding); } catch (_) { /* storage may be disabled */ }
   if (reload && currentFileBytes) {
     const decoded = decodeBytes(currentFileBytes, encoding);
     if (decoded !== null) { editor.value = decoded; update(); showToast(`已按 ${encodingSelect.selectedOptions[0].textContent} 重新解析`); }
   }
+  captureDocument();
+  saveDocuments();
 }
 
-function setMode(mode) {
+function setMode(mode, preserveScroll = true) {
   const isEdit = mode === 'edit';
   const isPreview = mode === 'preview';
   const isSplit = mode === 'split';
   const outgoing = currentMode === 'preview' ? preview : editor;
   const outgoingRange = outgoing.scrollHeight - outgoing.clientHeight;
-  if (outgoingRange > 0) scrollProgress = outgoing.scrollTop / outgoingRange;
+  if (preserveScroll && outgoingRange > 0) scrollProgress = outgoing.scrollTop / outgoingRange;
   editModeButton.classList.toggle('active', isEdit);
   previewModeButton.classList.toggle('active', isPreview);
   splitModeButton.classList.toggle('active', isSplit);
@@ -422,8 +631,9 @@ function setMode(mode) {
   editorToolbar.hidden = isPreview;
   copyHtmlButton.hidden = isEdit;
   currentMode = mode;
-  try { localStorage.setItem('lumen-mode', mode); } catch (_) { /* storage may be disabled */ }
+  const selectedDocumentId = activeDocumentId;
   requestAnimationFrame(() => {
+    if (currentMode !== mode || activeDocumentId !== selectedDocumentId) return;
     syncingScroll = true;
     if (!isPreview) editor.scrollTop = Math.max(0, editor.scrollHeight - editor.clientHeight) * scrollProgress;
     if (!isEdit) preview.scrollTop = Math.max(0, preview.scrollHeight - preview.clientHeight) * scrollProgress;
@@ -432,22 +642,27 @@ function setMode(mode) {
   });
 }
 
-function loadFile(file) {
+async function loadFile(file) {
   if (!file || !(/\.(md|markdown)$/i.test(file.name) || file.type === 'text/markdown' || file.type === 'text/plain')) {
-    showToast('请选择 .md 或 .markdown 文件'); return;
+    showToast('请选择 .md 或 .markdown 文件'); return false;
   }
-  if (file.size > 5 * 1024 * 1024) { showToast('文件不能超过 5 MB'); return; }
-  const reader = new FileReader();
-  reader.onload = () => {
-    currentFileBytes = new Uint8Array(reader.result);
-    currentFilePath = file.path || null;
-    setEncoding(detectEncoding(currentFileBytes), false);
-    const decoded = decodeBytes(currentFileBytes, encodingSelect.value);
-    if (decoded === null) return;
-    editor.value = decoded; documentName.textContent = file.name; update(); showToast(`已载入 ${file.name}`);
-  };
-  reader.onerror = () => showToast('文件读取失败，请重试');
-  reader.readAsArrayBuffer(file);
+  if (file.size > 5 * 1024 * 1024) { showToast('文件不能超过 5 MB'); return false; }
+  try {
+    const bytes = new Uint8Array(await file.arrayBuffer());
+    const encoding = detectEncoding(bytes);
+    const content = decodeBytes(bytes, encoding);
+    if (content === null) return false;
+    const path = window.mojianDesktop?.getPathForFile?.(file) || file.path || null;
+    openDocument({ name: file.name, content, encoding, path, bytes });
+    return true;
+  } catch (_) { showToast(`无法读取 ${file.name}，请重试`); return false; }
+}
+
+async function loadFiles(files) {
+  let opened = 0;
+  for (const file of files) if (await loadFile(file)) opened++;
+  saveDocuments();
+  if (opened) showToast(`已打开 ${opened} 个文档${opened < files.length ? `，${files.length - opened} 个文件未导入` : ''}`);
 }
 
 editor.addEventListener('input', () => { currentFileBytes = null; update(); });
@@ -492,7 +707,7 @@ preview.addEventListener('click', event => {
   else window.open(url, '_blank', 'noopener,noreferrer');
 });
 editor.addEventListener('keydown', event => {
-  if (event.key === 'Tab') { event.preventDefault(); const s = editor.selectionStart; editor.setRangeText('  ', s, editor.selectionEnd, 'end'); update(); }
+  if (event.key === 'Tab') { event.preventDefault(); const s = editor.selectionStart; editor.setRangeText('  ', s, editor.selectionEnd, 'end'); currentFileBytes = null; update(); }
   if ((event.ctrlKey || event.metaKey) && ['b', 'i'].includes(event.key.toLowerCase())) {
     event.preventDefault(); wrapSelection(event.key.toLowerCase() === 'b' ? '**' : '*');
   }
@@ -503,31 +718,91 @@ function wrapSelection(mark) {
   const selected = editor.value.slice(start, end) || '文字';
   editor.setRangeText(mark + selected + mark, start, end, 'select');
   editor.selectionStart = start + mark.length; editor.selectionEnd = start + mark.length + selected.length;
-  editor.focus(); update();
+  editor.focus(); currentFileBytes = null; update();
 }
 
 function prefixLine(prefix) {
   const start = editor.selectionStart;
   const lineStart = editor.value.lastIndexOf('\n', start - 1) + 1;
-  editor.setRangeText(prefix, lineStart, lineStart, 'end'); editor.focus(); update();
+  editor.setRangeText(prefix, lineStart, lineStart, 'end'); editor.focus(); currentFileBytes = null; update();
 }
 
-document.querySelectorAll('.toolbar button').forEach(button => button.addEventListener('click', () => {
+document.querySelectorAll('.toolbar button[data-wrap], .toolbar button[data-prefix]').forEach(button => button.addEventListener('click', () => {
   if (button.dataset.wrap) wrapSelection(button.dataset.wrap);
   if (button.dataset.prefix) prefixLine(button.dataset.prefix);
 }));
 document.querySelector('#uploadButton').addEventListener('click', () => fileInput.click());
-fileInput.addEventListener('change', () => { loadFile(fileInput.files[0]); fileInput.value = ''; });
+document.querySelector('#newDocumentButton').addEventListener('click', newDocument);
+fileInput.addEventListener('change', () => { loadFiles(Array.from(fileInput.files)); fileInput.value = ''; });
+documentTabs.addEventListener('click', event => {
+  const button = event.target.closest('[data-document-id]');
+  if (button && button.dataset.documentId !== activeDocumentId) activateDocument(button.dataset.documentId);
+});
+documentTabs.addEventListener('keydown', event => {
+  if (!['ArrowLeft', 'ArrowRight', 'Home', 'End'].includes(event.key)) return;
+  event.preventDefault();
+  const index = documents.findIndex(document => document.id === activeDocumentId);
+  const nextIndex = event.key === 'Home' ? 0 : event.key === 'End' ? documents.length - 1 : (index + (event.key === 'ArrowLeft' ? -1 : 1) + documents.length) % documents.length;
+  activateDocument(documents[nextIndex].id);
+  documentTabs.querySelector('[aria-selected="true"]').focus({ preventScroll: true });
+});
+new ResizeObserver(() => requestAnimationFrame(revealActiveTab)).observe(documentTabs);
+
+document.querySelector('#insertImageButton').addEventListener('click', () => imageInput.click());
+imageInput.addEventListener('change', async () => {
+  const file = imageInput.files[0];
+  imageInput.value = '';
+  if (!file) return;
+  const documentId = activeDocumentId;
+  const start = editor.selectionStart, end = editor.selectionEnd;
+  try {
+    if (!/^image\/(png|jpeg|gif|webp|avif|bmp|svg\+xml)$/.test(file.type)) { showToast('请选择 PNG、JPEG、GIF、WebP、AVIF、BMP 或 SVG 图片'); return; }
+    let source = window.mojianDesktop?.getPathForFile?.(file);
+    if (source) source = source.replace(/\\/g, '/');
+    else {
+      if (file.size > 2 * 1024 * 1024) { showToast('嵌入的图片不能超过 2 MB'); return; }
+      source = `data:${file.type};base64,${bytesToBase64(new Uint8Array(await file.arrayBuffer()))}`;
+    }
+    const document = documents.find(document => document.id === documentId);
+    if (!document) return;
+    const label = file.name.replace(/[\[\]<>\r\n]/g, '');
+    const destination = /^data:/i.test(source) ? source : encodeURI(source).replace(/#/g, '%23').replace(/\?/g, '%3F').replace(/</g, '%3C').replace(/>/g, '%3E');
+    const markdown = `![${label}](<${destination}>)`;
+    if (activeDocumentId === documentId) {
+      editor.setRangeText(markdown, start, end, 'end');
+      currentFileBytes = null;
+      update();
+      setMode('edit');
+    } else {
+      document.content = document.content.slice(0, start) + markdown + document.content.slice(end);
+      document.bytes = null;
+      saveDocuments();
+    }
+    showToast('已插入图片');
+  } catch (_) { showToast('图片读取失败，请重试'); }
+});
+window.addEventListener('keydown', event => {
+  if (!(event.ctrlKey || event.metaKey) || event.altKey || event.shiftKey) return;
+  const key = event.key.toLowerCase();
+  if (key === 'n') { event.preventDefault(); newDocument(); }
+  if (key === 'o') { event.preventDefault(); fileInput.click(); }
+  if (key === 's') { event.preventDefault(); document.querySelector('#downloadButton').click(); }
+});
 document.querySelector('#downloadButton').addEventListener('click', () => {
   const encoding = encodingSelect.value;
+  const encodingLabel = encodingSelect.selectedOptions[0].textContent;
+  const name = documentName.textContent.trim() || '未命名文档.md';
+  const filename = /\.(md|markdown)$/i.test(name) ? name : `${name}.md`;
+  const content = editor.value;
   const finish = base64 => {
-    const blob = new Blob([base64ToBytes(base64)], { type: `text/markdown;charset=${encoding}` });
+    const exportEncoding = window.mojianDesktop?.encodeText ? encoding : 'utf-8';
+    const blob = new Blob([base64ToBytes(base64)], { type: `text/markdown;charset=${exportEncoding}` });
     const link = document.createElement('a'); link.href = URL.createObjectURL(blob);
-    link.download = /\.(md|markdown)$/i.test(documentName.textContent) ? documentName.textContent : `${documentName.textContent}.md`;
-    link.click(); setTimeout(() => URL.revokeObjectURL(link.href), 1000); showToast(`已按 ${encodingSelect.selectedOptions[0].textContent} 导出`);
+    link.download = filename;
+    link.click(); setTimeout(() => URL.revokeObjectURL(link.href), 1000); showToast(`已按 ${exportEncoding === encoding ? encodingLabel : 'UTF-8'} 导出 ${filename}`);
   };
-  if (window.mojianDesktop?.encodeText) window.mojianDesktop.encodeText(editor.value, encoding).then(finish).catch(() => showToast('当前环境不支持该编码导出'));
-  else finish(bytesToBase64(new TextEncoder().encode(editor.value)));
+  if (window.mojianDesktop?.encodeText) window.mojianDesktop.encodeText(content, encoding).then(finish).catch(() => showToast('当前环境不支持该编码导出'));
+  else finish(bytesToBase64(new TextEncoder().encode(content)));
 });
 encodingSelect.addEventListener('change', () => setEncoding(encodingSelect.value));
 copyHtmlButton.addEventListener('click', async () => {
@@ -546,39 +821,31 @@ if (window.mojianDesktop?.setAsDefaultMarkdownApp) {
   });
 }
 
-documentName.addEventListener('click', () => { documentName.contentEditable = 'true'; documentName.focus(); document.execCommand('selectAll', false, null); });
-documentName.addEventListener('blur', () => { documentName.contentEditable = 'false'; if (!documentName.textContent.trim()) documentName.textContent = '未命名文档.md'; update(); });
-documentName.addEventListener('keydown', event => { if (event.key === 'Enter') { event.preventDefault(); documentName.blur(); } });
+function renameDocument() { documentName.contentEditable = 'true'; documentName.focus(); document.execCommand('selectAll', false, null); }
+documentName.addEventListener('click', renameDocument);
+documentName.addEventListener('blur', () => { documentName.contentEditable = 'false'; documentName.textContent = documentName.textContent.trim() || '未命名文档.md'; update(); });
+documentName.addEventListener('keydown', event => {
+  if (event.key === 'Enter') { event.preventDefault(); if (documentName.isContentEditable) documentName.blur(); else renameDocument(); }
+});
 
 let dragDepth = 0;
-window.addEventListener('dragenter', event => { event.preventDefault(); dragDepth++; dropOverlay.classList.add('visible'); });
+window.addEventListener('dragenter', event => { if (!Array.from(event.dataTransfer?.types || []).includes('Files')) return; event.preventDefault(); dragDepth++; dropOverlay.classList.add('visible'); });
 window.addEventListener('dragover', event => event.preventDefault());
 window.addEventListener('dragleave', event => { event.preventDefault(); if (--dragDepth <= 0) { dragDepth = 0; dropOverlay.classList.remove('visible'); } });
-window.addEventListener('drop', event => { event.preventDefault(); dragDepth = 0; dropOverlay.classList.remove('visible'); loadFile(event.dataTransfer.files[0]); });
+window.addEventListener('drop', event => { event.preventDefault(); dragDepth = 0; dropOverlay.classList.remove('visible'); loadFiles(Array.from(event.dataTransfer.files)); });
 
-try { setEncoding(localStorage.getItem('lumen-encoding') || 'utf-8', false); }
-catch (_) { setEncoding('utf-8', false); }
-
-try {
-  editor.value = localStorage.getItem('mojian-content') ?? starter;
-  documentName.textContent = localStorage.getItem('mojian-name') || '未命名文档.md';
-} catch (_) { editor.value = starter; }
-update();
-let initialMode = 'preview';
-try { initialMode = localStorage.getItem('lumen-mode') || 'preview'; } catch (_) { /* storage may be disabled */ }
-setMode(['edit', 'preview', 'split'].includes(initialMode) ? initialMode : 'preview');
+restoreDocuments();
+window.addEventListener('beforeunload', saveDocuments);
+window.addEventListener('pagehide', saveDocuments);
 
 if (window.mojianDesktop) {
   window.mojianDesktop.onOpenFile(file => {
-    currentFileBytes = file.bytes ? base64ToBytes(file.bytes) : new TextEncoder().encode(file.content || '');
-    currentFilePath = file.path || null;
-    setEncoding(detectEncoding(currentFileBytes), false);
-    const decoded = decodeBytes(currentFileBytes, encodingSelect.value);
+    const bytes = file.bytes ? base64ToBytes(file.bytes) : new TextEncoder().encode(file.content || '');
+    const encoding = detectEncoding(bytes);
+    const decoded = decodeBytes(bytes, encoding);
     if (decoded === null) return;
-    editor.value = decoded;
-    documentName.textContent = file.name;
-    update();
-    setMode('edit');
+    openDocument({ name: file.name, content: decoded, encoding, path: file.path || null, bytes });
+    saveDocuments();
     showToast(`已打开 ${file.name}`);
   });
 }
