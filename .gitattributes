@@ -1,0 +1,6 @@
+# Preserve generated third-party code and license text as shipped upstream.
+assets/highlight.js whitespace=-blank-at-eol
+assets/vendor-licenses/* whitespace=-blank-at-eol
+
+# Two trailing spaces are intentional Markdown hard line breaks in fixtures.
+scripts/fixtures/*.md whitespace=-blank-at-eol

@@ -52,10 +52,12 @@ const themeButton = document.querySelector('#themeButton');
 const encodingSelect = document.querySelector('#encodingSelect');
 const documentTabs = document.querySelector('#documentTabs');
 const documentCount = document.querySelector('#documentCount');
+const reopenDocumentButton = document.querySelector('#reopenDocumentButton');
 const imageInput = document.querySelector('#imageInput');
 const documentsStorageKey = 'lumen-documents-v1';
 const supportedEncodings = new Set(['utf-8', 'gb18030', 'gbk', 'utf-16le', 'utf-16be']);
 let documents = [];
+let closedDocuments = [];
 let activeDocumentId = null;
 let currentFileBytes = null;
 let currentFilePath = null;
@@ -68,12 +70,13 @@ let syncingScroll = false;
 let currentMode = 'preview';
 let mermaidRenderId = 0;
 const imageUrlCache = new Map();
+let markdownSession = null;
 
 function createDocument({ name, content = '', encoding = 'utf-8', path = null, bytes = null, id } = {}) {
   if (!name) {
     let number = 1;
     do { name = number === 1 ? '未命名文档.md' : `未命名文档 ${number}.md`; number++; }
-    while (documents.some(document => document.name === name));
+    while ([...documents, ...closedDocuments].some(document => document.name === name));
   }
   return { id: id || crypto.randomUUID(), name, content, encoding, path, bytes, scroll: 0, selectionStart: 0, selectionEnd: 0 };
 }
@@ -96,20 +99,28 @@ function saveDocuments() {
   clearTimeout(saveTimer);
   captureDocument();
   try {
+    const serialize = list => list.map(({ id, name, content, encoding, path }) => ({ id, name, content, encoding, path }));
     localStorage.setItem(documentsStorageKey, JSON.stringify({
       version: 1,
       activeId: activeDocumentId,
-      documents: documents.map(({ id, name, content, encoding, path }) => ({ id, name, content, encoding, path }))
+      documents: serialize(documents),
+      closedDocuments: serialize(closedDocuments)
     }));
     saveStatus.textContent = '已自动保存';
+    return true;
   } catch (error) {
     saveStatus.textContent = error.name === 'QuotaExceededError' ? '存储空间不足，请导出文档' : '自动保存失败，请导出文档';
+    return false;
   }
 }
 
 function renderDocumentTabs() {
   documentTabs.replaceChildren();
   documents.forEach(document => {
+    const item = window.document.createElement('div');
+    item.className = 'document-tab-item';
+    item.classList.toggle('active', document.id === activeDocumentId);
+    item.setAttribute('role', 'presentation');
     const button = window.document.createElement('button');
     button.type = 'button';
     button.className = 'document-tab';
@@ -121,14 +132,48 @@ function renderDocumentTabs() {
     button.setAttribute('aria-controls', 'documentPanel');
     button.setAttribute('aria-selected', String(document.id === activeDocumentId));
     button.tabIndex = document.id === activeDocumentId ? 0 : -1;
-    documentTabs.append(button);
+    const close = window.document.createElement('button');
+    close.type = 'button';
+    close.className = 'document-tab-close';
+    close.dataset.closeDocumentId = document.id;
+    close.textContent = '×';
+    close.title = `关闭 ${document.name} (Ctrl+W)`;
+    close.setAttribute('aria-label', `关闭 ${document.name}`);
+    item.append(button, close);
+    documentTabs.append(item);
   });
   documentCount.textContent = `${documents.length} 个文档`;
-  documentPane.setAttribute('aria-labelledby', `doc-tab-${activeDocumentId}`);
+  reopenDocumentButton.disabled = !closedDocuments.length;
+  if (activeDocumentId) documentPane.setAttribute('aria-labelledby', `doc-tab-${activeDocumentId}`);
+  else documentPane.removeAttribute('aria-labelledby');
 }
 
 function revealActiveTab() {
-  documentTabs.querySelector('[aria-selected="true"]')?.scrollIntoView({ block: 'nearest', inline: 'nearest' });
+  documentTabs.querySelector('[aria-selected="true"]')?.closest('.document-tab-item').scrollIntoView({ block: 'nearest', inline: 'nearest' });
+}
+
+function setDocumentControls(enabled) {
+  editor.disabled = !enabled;
+  encodingSelect.disabled = !enabled;
+  editModeButton.disabled = !enabled;
+  splitModeButton.disabled = !enabled;
+  copyHtmlButton.disabled = !enabled;
+  document.querySelector('#downloadButton').disabled = !enabled;
+  documentName.tabIndex = enabled ? 0 : -1;
+}
+
+function clearDocumentView() {
+  activeDocumentId = null;
+  currentFileBytes = null;
+  currentFilePath = null;
+  scrollProgress = 0;
+  editor.value = '';
+  documentName.textContent = '未打开文档';
+  documentName.contentEditable = 'false';
+  setDocumentControls(false);
+  update();
+  renderDocumentTabs();
+  setMode('preview', false);
 }
 
 function activateDocument(id, mode = currentMode) {
@@ -142,12 +187,51 @@ function activateDocument(id, mode = currentMode) {
   currentFileBytes = next.bytes;
   currentFilePath = next.path;
   encodingSelect.value = next.encoding;
+  setDocumentControls(true);
   scrollProgress = next.scroll;
   editor.setSelectionRange(next.selectionStart, next.selectionEnd);
   update();
   renderDocumentTabs();
   setMode(mode, false);
   revealActiveTab();
+}
+
+function closeDocument(id = activeDocumentId) {
+  const index = documents.findIndex(document => document.id === id);
+  if (index < 0) return;
+  if (documentName.isContentEditable) documentName.blur();
+  captureDocument();
+  const previousDocuments = [...documents], previousClosed = [...closedDocuments];
+  const previousId = activeDocumentId, previousMode = currentMode;
+  const [closed] = documents.splice(index, 1);
+  closedDocuments.push(closed);
+  if (id === activeDocumentId) {
+    activeDocumentId = null;
+    const next = documents[Math.min(index, documents.length - 1)];
+    if (next) activateDocument(next.id, previousMode);
+    else clearDocumentView();
+  } else { renderDocumentTabs(); revealActiveTab(); }
+  if (!saveDocuments()) {
+    const failedStatus = saveStatus.textContent;
+    documents = previousDocuments;
+    closedDocuments = previousClosed;
+    activateDocument(previousId, previousMode);
+    clearTimeout(saveTimer);
+    saveStatus.textContent = failedStatus;
+    showToast('关闭失败：无法保存草稿，请先导出文档');
+    return;
+  }
+  requestAnimationFrame(() => documentTabs.querySelector('[aria-selected="true"]')?.focus({ preventScroll: true }));
+  showToast(`已关闭 ${closed.name}，可恢复最近关闭的文档`);
+}
+
+function reopenDocument() {
+  const document = closedDocuments.pop();
+  if (!document) return;
+  documents.push(document);
+  activateDocument(document.id, currentMode);
+  saveDocuments();
+  showToast(`已恢复 ${document.name}`);
 }
 
 function newDocument() {
@@ -162,6 +246,13 @@ function openDocument({ name, content, encoding, path, bytes }) {
   const normalizedPath = path ? path.replace(/\\/g, '/').toLowerCase() : null;
   const existing = normalizedPath && documents.find(document => document.path?.replace(/\\/g, '/').toLowerCase() === normalizedPath);
   if (existing) { activateDocument(existing.id, 'preview'); return; }
+  const closedIndex = normalizedPath ? closedDocuments.findIndex(document => document.path?.replace(/\\/g, '/').toLowerCase() === normalizedPath) : -1;
+  if (closedIndex >= 0) {
+    const [document] = closedDocuments.splice(closedIndex, 1);
+    documents.push(document);
+    activateDocument(document.id, 'preview');
+    return;
+  }
   const document = createDocument({ name, content, encoding, path, bytes });
   documents.push(document);
   activateDocument(document.id, 'preview');
@@ -172,7 +263,7 @@ function restoreDocuments() {
     const stored = JSON.parse(localStorage.getItem(documentsStorageKey) || 'null');
     if (stored?.version === 1 && Array.isArray(stored.documents)) {
       const ids = new Set();
-      documents = stored.documents.filter(document => {
+      const deserialize = list => list.filter(document => {
         if (!document || typeof document.id !== 'string' || ids.has(document.id) || typeof document.name !== 'string' || typeof document.content !== 'string') return false;
         ids.add(document.id);
         return true;
@@ -182,10 +273,14 @@ function restoreDocuments() {
         path: typeof document.path === 'string' ? document.path : null,
         bytes: null
       }));
+      documents = deserialize(stored.documents);
+      closedDocuments = deserialize(Array.isArray(stored.closedDocuments) ? stored.closedDocuments : []);
       if (documents.length) {
         activateDocument(documents.some(document => document.id === stored.activeId) ? stored.activeId : documents[0].id, 'preview');
         return;
       }
+      clearDocumentView();
+      return;
     }
   } catch (_) { /* Fall back to the previous single-document draft. */ }
   let content = starter, name = '欢迎使用 Lumen.md', encoding = 'utf-8';
@@ -221,82 +316,39 @@ function escapeHtml(value) {
   return value.replace(/[&<>"']/g, c => ({ '&':'&amp;', '<':'&lt;', '>':'&gt;', '"':'&quot;', "'":'&#39;' })[c]);
 }
 
-function extractImages(text, images) {
-  const pattern = /!\[([^\]\n]*)\]\(/g;
-  let output = '', offset = 0, match;
-  while ((match = pattern.exec(text))) {
-    let end = pattern.lastIndex, depth = 1, angle = false;
-    for (; end < text.length; end++) {
-      if (!angle && text[end] === '\\' && /[()]/.test(text[end + 1] || '')) { end++; continue; }
-      if (text[end] === '<') angle = true;
-      if (text[end] === '>') angle = false;
-      if (!angle && text[end] === '(') depth++;
-      if (!angle && text[end] === ')' && --depth === 0) break;
-      if (text[end] === '\n') break;
-    }
-    if (depth !== 0) continue;
-    const destination = text.slice(pattern.lastIndex, end).trim();
-    const parts = destination.match(/^<([^>]+)>(?:\s+["'](.*)["'])?$/) || destination.match(/^(.+?)(?:\s+["'](.*)["'])?$/);
-    if (!parts) continue;
-    const source = /^(?:[a-z]:[\\/]|\\\\)/i.test(parts[1]) ? parts[1] : parts[1].replace(/\\([()])/g, '$1');
-    images.push(`<img src="${escapeHtml(source)}" alt="${escapeHtml(match[1])}"${parts[2] ? ` title="${escapeHtml(parts[2])}"` : ''}>`);
-    output += text.slice(offset, match.index) + `\u0000IMAGE${images.length - 1}\u0000`;
-    offset = end + 1;
-    pattern.lastIndex = offset;
-  }
-  return output + text.slice(offset);
-}
-
-function inline(text) {
-  const code = [];
-  let prepared = text.replace(/`([^`]+)`/g, (_, value) => {
-    code.push(`<code>${escapeHtml(value)}</code>`);
-    return `\u0000CODE${code.length - 1}\u0000`;
-  });
-  const images = [];
-  prepared = extractImages(prepared, images);
-  const rawHtml = [];
-  let out = escapeHtml(prepared.replace(/<\/?[A-Za-z][^>\n]*>/g, tag => {
-    rawHtml.push(tag);
-    return `\u0000HTML${rawHtml.length - 1}\u0000`;
-  }));
-  out = out.replace(/\[([^\]]+)\]\(([^)]+)\)/g, (_, label, rawTarget) => {
-    const target = rawTarget.trim();
-    if (/^https?:\/\//i.test(target)) return `<a href="${target}" target="_blank" rel="noopener noreferrer">${label}</a>`;
-    return `<a href="#" data-local-path="${target}">${label}</a>`;
-  });
-  out = out.replace(/(^|[\s(>])((?:https?:\/\/|www\.)[^\s<]+)/gi, (_, prefix, value) => {
-    const trailing = value.match(/[.,!?;:，。！？；：)\]]+$/)?.[0] || '';
-    const address = value.slice(0, value.length - trailing.length);
-    const href = address.toLowerCase().startsWith('www.') ? `https://${address}` : address;
-    return `${prefix}<a href="${href}" target="_blank" rel="noopener noreferrer">${address}</a>${trailing}`;
-  });
-  out = out.replace(/(^|[\s(>])((?:[A-Za-z]:[\\/]|\\\\)[^\s<]+)/g, (_, prefix, value) => {
-    const trailing = value.match(/[.,!?;:，。！？；：)\]]+$/)?.[0] || '';
-    const target = value.slice(0, value.length - trailing.length);
-    return `${prefix}<a href="#" data-local-path="${target}">${target}</a>${trailing}`;
-  });
-  out = out.replace(/\*\*([^*]+)\*\*/g, '<strong>$1</strong>');
-  out = out.replace(/__([^_]+)__/g, '<strong>$1</strong>');
-  out = out.replace(/(^|[^*])\*([^*\n]+)\*/g, '$1<em>$2</em>');
-  out = out.replace(/~~([^~]+)~~/g, '<del>$1</del>');
-  out = out.replace(/\u0000CODE(\d+)\u0000/g, (_, i) => code[Number(i)]);
-  out = out.replace(/\u0000HTML(\d+)\u0000/g, (_, i) => rawHtml[Number(i)]);
-  out = out.replace(/\u0000IMAGE(\d+)\u0000/g, (_, i) => images[Number(i)]);
-  return out;
-}
-
 const allowedHtmlTags = new Set([
   'a', 'abbr', 'b', 'blockquote', 'br', 'center', 'cite', 'code', 'dd', 'del', 'details', 'div', 'dl', 'dt', 'em',
   'figcaption', 'figure', 'h1', 'h2', 'h3', 'h4', 'h5', 'h6', 'hr', 'i', 'img', 'input', 'kbd', 'li', 'mark',
   'ol', 'p', 'pre', 's', 'section', 'small', 'span', 'strong', 'sub', 'summary', 'sup', 'table', 'tbody', 'td',
-  'th', 'thead', 'tr', 'u', 'ul'
+  'th', 'thead', 'tr', 'u', 'ul', 'audio', 'video', 'source', 'font'
 ]);
-const allowedHtmlAttributes = new Set(['align', 'alt', 'checked', 'colspan', 'disabled', 'height', 'open', 'rowspan', 'start', 'title', 'type', 'width']);
+const allowedHtmlAttributes = new Set(['align', 'alt', 'checked', 'colspan', 'color', 'disabled', 'height', 'open', 'rowspan', 'start', 'title', 'type', 'width']);
+const safeHtmlClasses = new Set(['task', 'table-wrap', 'flowchart-diagram', 'mermaid-diagram', 'math-expression', 'footnotes', 'footnote-ref', 'footnote-backref', 'markdown-toc', 'markdown-callout', 'callout-title', 'export-placeholder', 'html-markdown-table']);
 
-function sanitizeRenderedHtml(html) {
+function safeLocalTarget(value) {
+  return value && !/[\u0000-\u001f]/.test(value) && (!/^[a-z][a-z\d+.-]*:/i.test(value) || /^(?:file:|[a-z]:[\\/])/i.test(value));
+}
+
+function safeTextStyle(element, value) {
+  const probe = document.createElement('span');
+  probe.style.cssText = value;
+  element.removeAttribute('style');
+  for (const property of ['color', 'background-color', 'text-align', 'font-weight', 'font-style', 'text-decoration', 'vertical-align', 'white-space']) {
+    const rule = probe.style.getPropertyValue(property);
+    if (rule && !/(?:url\s*\(|expression\s*\(|var\s*\(|[<>])/i.test(rule) && CSS.supports(property, rule)) element.style.setProperty(property, rule);
+  }
+}
+
+function sanitizeRenderedHtml(html, parseHtmlCells = true) {
   const template = document.createElement('template');
-  template.innerHTML = html;
+  template.innerHTML = window.DOMPurify ? window.DOMPurify.sanitize(html, {
+    ALLOWED_TAGS: [...allowedHtmlTags],
+    ALLOWED_ATTR: [...allowedHtmlAttributes, 'class', 'style', 'id', 'href', 'src', 'data-local-path', 'data-flowchart-source', 'data-math-source', 'data-math-display'],
+    ALLOW_DATA_ATTR: false,
+    ALLOW_UNKNOWN_PROTOCOLS: true,
+    FORBID_TAGS: ['script', 'style', 'iframe', 'object', 'embed', 'form'],
+    FORBID_CONTENTS: ['script', 'style', 'iframe', 'object', 'embed']
+  }) : escapeHtml(html);
   const elements = [...template.content.querySelectorAll('*')];
   elements.forEach(element => {
     const tag = element.tagName.toLowerCase();
@@ -308,24 +360,34 @@ function sanitizeRenderedHtml(html) {
     [...element.attributes].forEach(attribute => {
       const name = attribute.name.toLowerCase();
       if (name === 'class') {
-        const safeClasses = attribute.value.split(/\s+/).filter(value => value === 'task' || value === 'table-wrap' || value === 'flowchart-diagram' || value === 'mermaid-diagram' || /^language-[\w-]+$/.test(value));
+        const safeClasses = attribute.value.split(/\s+/).filter(value => safeHtmlClasses.has(value) || /^(?:language-[\w-]+|toc-level-[1-6]|callout-(?:note|tip|important|warning|caution|success))$/.test(value));
         if (safeClasses.length) element.className = safeClasses.join(' ');
         else element.removeAttribute('class');
-      } else if (name === 'style' && /^text-align\s*:\s*(left|center|right)\s*;?$/i.test(attribute.value)) {
-        element.style.textAlign = attribute.value.match(/(left|center|right)/i)[1].toLowerCase();
-      } else if (!allowedHtmlAttributes.has(name) && name !== 'href' && name !== 'src' && name !== 'data-local-path' && name !== 'data-flowchart-source') {
+      } else if (name === 'style') {
+        safeTextStyle(element, attribute.value);
+      } else if (name === 'id') {
+        const id = attribute.value.replace(/[^\p{L}\p{N}_:.-]/gu, '-').slice(0, 240);
+        if (id) element.id = id.startsWith('lumen-') ? id : `lumen-html-${id}`;
+        else element.removeAttribute('id');
+      } else if (!allowedHtmlAttributes.has(name) && !['href', 'src', 'data-local-path', 'data-flowchart-source', 'data-math-source', 'data-math-display'].includes(name)) {
         element.removeAttribute(attribute.name);
       }
     });
     if (tag === 'a') {
       const href = element.getAttribute('href')?.trim() || '';
-      if (/^https?:\/\//i.test(href)) {
+      const localPath = element.dataset.localPath;
+      if (localPath) {
+        if (safeLocalTarget(localPath)) element.setAttribute('href', '#');
+        else { element.removeAttribute('href'); element.removeAttribute('data-local-path'); }
+      } else if (/^(?:https?:\/\/|mailto:|tel:)/i.test(href)) {
         element.setAttribute('target', '_blank');
         element.setAttribute('rel', 'noopener noreferrer');
-      } else if (href && href !== '#') {
+      } else if (/^#[^\s]*$/.test(href) && href !== '#') {
+        /* Anchor links are resolved inside the current preview. */
+      } else if (href && href !== '#' && safeLocalTarget(href)) {
         element.setAttribute('href', '#');
         element.dataset.localPath = href;
-      } else if (!element.dataset.localPath) {
+      } else {
         element.removeAttribute('href');
       }
     }
@@ -335,11 +397,35 @@ function sanitizeRenderedHtml(html) {
       element.dataset.imageSource = src;
       element.setAttribute('loading', 'lazy');
     }
+    if (['audio', 'video', 'source'].includes(tag)) {
+      const src = element.getAttribute('src')?.trim() || '';
+      element.removeAttribute('src');
+      element.dataset.mediaSource = src;
+      if (tag !== 'source') {
+        element.setAttribute('controls', '');
+        element.setAttribute('preload', 'metadata');
+      }
+    }
     if (tag === 'input') {
       if (element.getAttribute('type')?.toLowerCase() !== 'checkbox') element.remove();
       else element.disabled = true;
     }
   });
+  if (parseHtmlCells && window.LumenMarkdown?.renderInline) {
+    template.content.querySelectorAll('table.html-markdown-table td, table.html-markdown-table th').forEach(cell => {
+      const walker = document.createTreeWalker(cell, NodeFilter.SHOW_TEXT);
+      const nodes = [];
+      while (walker.nextNode()) {
+        const node = walker.currentNode;
+        if (!node.parentElement.closest('pre, code, a, .math-expression') && /[*_`$~]|!?\[/.test(node.textContent)) nodes.push(node);
+      }
+      nodes.forEach(node => {
+        const fragment = document.createElement('template');
+        fragment.innerHTML = sanitizeRenderedHtml(markdownSession ? markdownSession.renderInline(node.textContent) : window.LumenMarkdown.renderInline(node.textContent), false);
+        node.replaceWith(fragment.content);
+      });
+    });
+  }
   return template.innerHTML;
 }
 
@@ -348,8 +434,73 @@ function imagePlaceholder(image, source) {
   const placeholder = document.createElement('span');
   placeholder.className = 'image-placeholder';
   placeholder.setAttribute('role', 'status');
-  placeholder.textContent = `图片无法显示：${image.alt || (source.startsWith('data:') ? '插入的图片' : source) || '图片地址为空'}`;
+  const message = document.createElement('span');
+  message.textContent = `图片无法显示：${image.alt || (source.startsWith('data:') ? '插入的图片' : source) || '图片地址为空'}`;
+  placeholder.append(message);
+  appendResourceLink(placeholder, source);
   image.replaceWith(placeholder);
+}
+
+function appendResourceLink(container, source) {
+  const link = document.createElement('a');
+  link.textContent = '打开原链接';
+  if (/^https?:\/\//i.test(source)) {
+    try { link.href = new URL(source).href; } catch (_) { return; }
+  } else if (safeLocalTarget(source)) {
+    link.href = '#';
+    link.dataset.localPath = source;
+    link.textContent = '打开原文件';
+  } else return;
+  container.append(link);
+}
+
+function resolvePreviewMedia() {
+  const sourceFile = currentFilePath;
+  preview.querySelectorAll('audio, video').forEach(async media => {
+    const direct = media.dataset.mediaSource;
+    const sources = direct ? [direct] : Array.from(media.querySelectorAll('source'), source => source.dataset.mediaSource).filter(Boolean);
+    const fail = () => {
+      if (!media.isConnected) return;
+      const placeholder = document.createElement('span');
+      placeholder.className = 'image-placeholder';
+      placeholder.textContent = '音视频无法播放，可打开原文件或链接';
+      appendResourceLink(placeholder, sources[0] || '');
+      media.replaceWith(placeholder);
+    };
+    media.addEventListener('error', fail, { once: true });
+    for (const source of sources) {
+      let url;
+      try {
+        if (/^https?:\/\//i.test(source)) url = new URL(source).href;
+        else if (/^data:(audio|video)\/[^,]+,/i.test(source)) url = source;
+        else url = await window.mojianDesktop?.resolveMediaUrl?.(source, sourceFile);
+      } catch (_) { /* Try the next source before showing the fallback. */ }
+      if (!media.isConnected) return;
+      if (url) { media.src = url; return; }
+    }
+    fail();
+  });
+}
+
+function highlightCodeBlocks() {
+  if (!window.hljs) return;
+  preview.querySelectorAll('pre code').forEach(code => {
+    const language = [...code.classList].find(name => name.startsWith('language-'))?.slice(9);
+    if (!language || !window.hljs.getLanguage(language) || code.textContent.length > 100000) return;
+    try { code.innerHTML = window.hljs.highlight(code.textContent, { language, ignoreIllegals: true }).value; }
+    catch (_) { /* Preserve code text for unknown or invalid syntax. */ }
+  });
+}
+
+function scrollPreviewToFragment(fragment) {
+  let target = String(fragment || '').replace(/^#/, '');
+  try { target = decodeURIComponent(target); } catch (_) { return false; }
+  const slug = target.normalize('NFC').toLowerCase().replace(/[^\p{L}\p{N}_\-\s]/gu, '').trim().replace(/\s+/g, '-');
+  const candidates = new Set([target, `lumen-heading-${slug}`, `lumen-html-${target}`]);
+  const element = [...preview.querySelectorAll('[id]')].find(element => candidates.has(element.id));
+  if (!element) return false;
+  preview.scrollTop += element.getBoundingClientRect().top - preview.getBoundingClientRect().top - 12;
+  return true;
 }
 
 function resolvePreviewImages() {
@@ -381,111 +532,9 @@ function resolvePreviewImages() {
   });
 }
 
-function splitTableRow(line) {
-  let value = line.trim();
-  if (value.startsWith('|')) value = value.slice(1);
-  if (value.endsWith('|') && !value.endsWith('\\|')) value = value.slice(0, -1);
-  const cells = [];
-  let cell = '';
-  for (let i = 0; i < value.length; i++) {
-    if (value[i] === '\\' && value[i + 1] === '|') { cell += '|'; i++; }
-    else if (value[i] === '|') { cells.push(cell.trim()); cell = ''; }
-    else cell += value[i];
-  }
-  cells.push(cell.trim());
-  return cells;
-}
-
-function isTableDivider(line) {
-  const cells = splitTableRow(line);
-  return cells.length > 0 && cells.every(cell => /^:?-{3,}:?$/.test(cell.replace(/\s/g, '')));
-}
-
-function tableAlignment(divider) {
-  const value = divider.replace(/\s/g, '');
-  if (value.startsWith(':') && value.endsWith(':')) return 'center';
-  if (value.endsWith(':')) return 'right';
-  return 'left';
-}
-
 function renderMarkdown(source) {
-  const lines = source.replace(/\r\n?/g, '\n').split('\n');
-  let html = '', paragraph = [], listType = '', inCode = false, codeLang = '', codeLines = [], inQuote = false;
-  const flushParagraph = () => { if (paragraph.length) { html += `<p>${inline(paragraph.join(' '))}</p>`; paragraph = []; } };
-  const closeList = () => { if (listType) { html += `</${listType}>`; listType = ''; } };
-  const closeQuote = () => { if (inQuote) { flushParagraph(); html += '</blockquote>'; inQuote = false; } };
-
-  for (let lineIndex = 0; lineIndex < lines.length; lineIndex++) {
-    const line = lines[lineIndex];
-    const fence = line.match(/^```\s*([\w-]*)/);
-    if (fence) {
-      if (!inCode) { flushParagraph(); closeList(); closeQuote(); inCode = true; codeLang = fence[1]; codeLines = []; }
-      else {
-        const code = codeLines.join('\n');
-        const language = codeLang.toLowerCase();
-        html += language === 'flowchart'
-          ? `<div class="flowchart-diagram" data-flowchart-source="${escapeHtml(encodeURIComponent(code))}"></div>`
-          : language === 'mermaid'
-            ? `<div class="mermaid-diagram" data-flowchart-source="${escapeHtml(encodeURIComponent(code))}"></div>`
-            : `<pre><code${codeLang ? ` class="language-${escapeHtml(codeLang)}"` : ''}>${escapeHtml(code)}</code></pre>`;
-        inCode = false;
-      }
-      continue;
-    }
-    if (inCode) { codeLines.push(line); continue; }
-    if (!line.trim()) { flushParagraph(); closeList(); closeQuote(); continue; }
-    if (line.includes('|') && lines[lineIndex + 1] && isTableDivider(lines[lineIndex + 1])) {
-      flushParagraph(); closeList(); closeQuote();
-      const headers = splitTableRow(line);
-      const dividers = splitTableRow(lines[lineIndex + 1]);
-      const aligns = dividers.map(tableAlignment);
-      html += '<div class="table-wrap"><table><thead><tr>';
-      headers.forEach((cell, index) => { html += `<th style="text-align:${aligns[index] || 'left'}">${inline(cell)}</th>`; });
-      html += '</tr></thead><tbody>';
-      lineIndex += 2;
-      while (lineIndex < lines.length && lines[lineIndex].trim() && lines[lineIndex].includes('|')) {
-        const cells = splitTableRow(lines[lineIndex]);
-        html += '<tr>';
-        headers.forEach((_, index) => { html += `<td style="text-align:${aligns[index] || 'left'}">${inline(cells[index] || '')}</td>`; });
-        html += '</tr>';
-        lineIndex++;
-      }
-      html += '</tbody></table></div>';
-      lineIndex--;
-      continue;
-    }
-    if (/^\s*([-*_])(?:\s*\1){2,}\s*$/.test(line)) { flushParagraph(); closeList(); closeQuote(); html += '<hr>'; continue; }
-    const heading = line.match(/^(#{1,6})\s+(.+)$/);
-    if (heading) { flushParagraph(); closeList(); closeQuote(); const level = heading[1].length; html += `<h${level}>${inline(heading[2])}</h${level}>`; continue; }
-    const quote = line.match(/^>\s?(.*)$/);
-    if (quote) { flushParagraph(); closeList(); if (!inQuote) { html += '<blockquote>'; inQuote = true; } paragraph.push(quote[1]); continue; }
-    closeQuote();
-    const item = line.match(/^\s*([-+*]|\d+[.)])\s+(.+)$/);
-    if (item) {
-      flushParagraph(); const nextType = /\d/.test(item[1]) ? 'ol' : 'ul';
-      if (listType !== nextType) {
-        closeList();
-        const start = nextType === 'ol' ? Number.parseInt(item[1], 10) : 1;
-        html += nextType === 'ol' && start !== 1 ? `<ol start="${start}">` : `<${nextType}>`;
-        listType = nextType;
-      }
-      const task = item[2].match(/^\[([ xX])\]\s+(.+)$/);
-      html += task ? `<li class="task"><input type="checkbox" disabled ${task[1].toLowerCase() === 'x' ? 'checked' : ''}> ${inline(task[2])}</li>` : `<li>${inline(item[2])}</li>`;
-      continue;
-    }
-    closeList(); paragraph.push(line.trim());
-  }
-  if (inCode) {
-    const code = codeLines.join('\n');
-    const language = codeLang.toLowerCase();
-    html += language === 'flowchart'
-      ? `<div class="flowchart-diagram" data-flowchart-source="${escapeHtml(encodeURIComponent(code))}"></div>`
-      : language === 'mermaid'
-        ? `<div class="mermaid-diagram" data-flowchart-source="${escapeHtml(encodeURIComponent(code))}"></div>`
-        : `<pre><code>${escapeHtml(code)}</code></pre>`;
-  }
-  flushParagraph(); closeList(); closeQuote();
-  return html;
+  try { markdownSession = window.LumenMarkdown.createSession(source); return markdownSession.html; }
+  catch (error) { return '<p>Markdown 预览失败：' + escapeHtml(error.message) + '</p><pre><code>' + escapeHtml(source) + '</code></pre>'; }
 }
 
 function renderFlowcharts() {
@@ -495,7 +544,13 @@ function renderFlowcharts() {
     try {
       if (!window.flowchart) throw new Error('流程图库未加载');
       container.removeAttribute('data-flowchart-source');
-      window.flowchart.parse(decodeURIComponent(source)).drawSVG(container, {
+      const diagramSource = decodeURIComponent(source).replace(/:\$[^\r\n]*/g, '');
+      const chart = window.flowchart.parse(diagramSource);
+      Object.values(chart.symbols || {}).forEach(symbol => {
+        delete symbol.function;
+        if (symbol.link && !/^(?:https?:\/\/|#[^\s]*)/i.test(symbol.link)) delete symbol.link;
+      });
+      chart.drawSVG(container, {
         'line-width': 2,
         'line-length': 38,
         'text-margin': 10,
@@ -509,9 +564,26 @@ function renderFlowcharts() {
         'arrow-end': 'block',
         'scale': 1
       });
+      normalizeDiagramLinks(container);
     } catch (error) {
       container.classList.add('flowchart-error');
       container.textContent = `流程图渲染失败：${error.message}`;
+    }
+  });
+}
+
+function normalizeDiagramLinks(container) {
+  container.querySelectorAll('a').forEach(link => {
+    const href = link.getAttribute('href') || link.getAttributeNS('http://www.w3.org/1999/xlink', 'href') || '';
+    link.removeAttributeNS('http://www.w3.org/1999/xlink', 'href');
+    link.removeAttribute('href');
+    link.removeAttribute('target');
+    if (/^#[^\s]+$/.test(href)) link.setAttribute('href', href);
+    else if (/^https?:\/\//i.test(href)) {
+      try {
+        const url = new URL(href);
+        if (['http:', 'https:'].includes(url.protocol)) link.setAttribute('href', url.href);
+      } catch (_) { /* Leave invalid diagram links inactive. */ }
     }
   });
 }
@@ -541,6 +613,7 @@ async function renderMermaidDiagrams() {
       container.removeAttribute('data-flowchart-source');
       container.innerHTML = result.svg;
       result.bindFunctions?.(container);
+      normalizeDiagramLinks(container);
     } catch (error) {
       if (!container.isConnected) return;
       container.classList.add('flowchart-error');
@@ -551,15 +624,23 @@ async function renderMermaidDiagrams() {
 
 function update() {
   const value = editor.value;
+  markdownSession = null;
   const previousName = activeDocument()?.name;
   captureDocument();
   if (previousName !== activeDocument()?.name) renderDocumentTabs();
-  preview.innerHTML = value.trim() ? sanitizeRenderedHtml(renderMarkdown(value)) : '<div class="preview-empty"><strong>这份文档还是空白的</strong><p>点击「编辑」开始书写，或在编辑工具栏中插入图片。</p></div>';
+  preview.innerHTML = !activeDocument()
+    ? '<div class="preview-empty"><strong>尚未打开文档</strong><p>点击「新建文档」开始书写，或打开已有文档。关闭的草稿可通过「恢复关闭」重新打开。</p></div>'
+    : value.trim() ? sanitizeRenderedHtml(renderMarkdown(value)) : '<div class="preview-empty"><strong>这份文档还是空白的</strong><p>点击「编辑」开始书写，或在编辑工具栏中插入图片。</p></div>';
+  const footnotes = markdownSession?.renderFootnotes();
+  if (footnotes) preview.insertAdjacentHTML('beforeend', sanitizeRenderedHtml(footnotes, false));
   resolvePreviewImages();
+  resolvePreviewMedia();
+  window.LumenMarkdown?.renderMath(preview);
+  highlightCodeBlocks();
   renderFlowcharts();
   renderMermaidDiagrams();
-  const count = value.length;
-  const lines = value.split('\n').length;
+  const count = activeDocument() ? value.length : 0;
+  const lines = activeDocument() ? value.split('\n').length : 0;
   wordCount.textContent = count.toLocaleString('zh-CN');
   lineCount.textContent = lines.toLocaleString('zh-CN');
   lineNumbers.textContent = Array.from({ length: lines }, (_, i) => i + 1).join('\n');
@@ -691,20 +772,28 @@ preview.addEventListener('scroll', () => {
   }
 });
 preview.addEventListener('click', event => {
-  const link = event.target.closest('a[href]');
+  const link = event.target.closest('a');
   if (!link) return;
+  event.preventDefault();
   const localPath = link.dataset.localPath;
   if (localPath) {
     event.preventDefault();
-    if (window.mojianDesktop?.openLocalPath) window.mojianDesktop.openLocalPath(localPath, currentFilePath);
+    if (window.mojianDesktop?.openLocalPath) window.mojianDesktop.openLocalPath(localPath, currentFilePath).then(result => { if (!result?.opened) showToast(result?.error || '文件无法打开，请检查附件是否已下载'); }).catch(() => showToast('文件无法打开，请重试'));
     else showToast('本地文件链接需要在桌面版中打开');
     return;
   }
-  const url = link.href;
-  if (!/^https?:$/i.test(new URL(url).protocol)) return;
+  const href = link.getAttribute('href') || '';
+  if (href.startsWith('#')) {
+    event.preventDefault();
+    if (!scrollPreviewToFragment(href)) showToast('文档中未找到对应位置');
+    return;
+  }
+  let url;
+  try { url = new URL(href, window.location.href); } catch (_) { return; }
+  if (!/^(https?|mailto|tel):$/i.test(url.protocol)) return;
   event.preventDefault();
-  if (window.mojianDesktop?.openExternalUrl) window.mojianDesktop.openExternalUrl(url);
-  else window.open(url, '_blank', 'noopener,noreferrer');
+  if (window.mojianDesktop?.openExternalUrl) window.mojianDesktop.openExternalUrl(url.href);
+  else window.open(url.href, '_blank', 'noopener,noreferrer');
 });
 editor.addEventListener('keydown', event => {
   if (event.key === 'Tab') { event.preventDefault(); const s = editor.selectionStart; editor.setRangeText('  ', s, editor.selectionEnd, 'end'); currentFileBytes = null; update(); }
@@ -735,10 +824,13 @@ document.querySelector('#uploadButton').addEventListener('click', () => fileInpu
 document.querySelector('#newDocumentButton').addEventListener('click', newDocument);
 fileInput.addEventListener('change', () => { loadFiles(Array.from(fileInput.files)); fileInput.value = ''; });
 documentTabs.addEventListener('click', event => {
+  const close = event.target.closest('[data-close-document-id]');
+  if (close) { event.preventDefault(); event.stopPropagation(); closeDocument(close.dataset.closeDocumentId); return; }
   const button = event.target.closest('[data-document-id]');
   if (button && button.dataset.documentId !== activeDocumentId) activateDocument(button.dataset.documentId);
 });
 documentTabs.addEventListener('keydown', event => {
+  if (!documents.length) return;
   if (!['ArrowLeft', 'ArrowRight', 'Home', 'End'].includes(event.key)) return;
   event.preventDefault();
   const index = documents.findIndex(document => document.id === activeDocumentId);
@@ -746,6 +838,7 @@ documentTabs.addEventListener('keydown', event => {
   activateDocument(documents[nextIndex].id);
   documentTabs.querySelector('[aria-selected="true"]').focus({ preventScroll: true });
 });
+reopenDocumentButton.addEventListener('click', reopenDocument);
 new ResizeObserver(() => requestAnimationFrame(revealActiveTab)).observe(documentTabs);
 
 document.querySelector('#insertImageButton').addEventListener('click', () => imageInput.click());
@@ -763,7 +856,7 @@ imageInput.addEventListener('change', async () => {
       if (file.size > 2 * 1024 * 1024) { showToast('嵌入的图片不能超过 2 MB'); return; }
       source = `data:${file.type};base64,${bytesToBase64(new Uint8Array(await file.arrayBuffer()))}`;
     }
-    const document = documents.find(document => document.id === documentId);
+    const document = [...documents, ...closedDocuments].find(document => document.id === documentId);
     if (!document) return;
     const label = file.name.replace(/[\[\]<>\r\n]/g, '');
     const destination = /^data:/i.test(source) ? source : encodeURI(source).replace(/#/g, '%23').replace(/\?/g, '%3F').replace(/</g, '%3C').replace(/>/g, '%3E');
@@ -782,8 +875,13 @@ imageInput.addEventListener('change', async () => {
   } catch (_) { showToast('图片读取失败，请重试'); }
 });
 window.addEventListener('keydown', event => {
-  if (!(event.ctrlKey || event.metaKey) || event.altKey || event.shiftKey) return;
+  if (!(event.ctrlKey || event.metaKey) || event.altKey) return;
   const key = event.key.toLowerCase();
+  if (event.shiftKey) {
+    if (key === 't') { event.preventDefault(); reopenDocument(); }
+    return;
+  }
+  if (key === 'w') { event.preventDefault(); closeDocument(); }
   if (key === 'n') { event.preventDefault(); newDocument(); }
   if (key === 'o') { event.preventDefault(); fileInput.click(); }
   if (key === 's') { event.preventDefault(); document.querySelector('#downloadButton').click(); }
@@ -821,7 +919,7 @@ if (window.mojianDesktop?.setAsDefaultMarkdownApp) {
   });
 }
 
-function renameDocument() { documentName.contentEditable = 'true'; documentName.focus(); document.execCommand('selectAll', false, null); }
+function renameDocument() { if (!activeDocument()) return; documentName.contentEditable = 'true'; documentName.focus(); document.execCommand('selectAll', false, null); }
 documentName.addEventListener('click', renameDocument);
 documentName.addEventListener('blur', () => { documentName.contentEditable = 'false'; documentName.textContent = documentName.textContent.trim() || '未命名文档.md'; update(); });
 documentName.addEventListener('keydown', event => {
@@ -835,6 +933,7 @@ window.addEventListener('dragleave', event => { event.preventDefault(); if (--dr
 window.addEventListener('drop', event => { event.preventDefault(); dragDepth = 0; dropOverlay.classList.remove('visible'); loadFiles(Array.from(event.dataTransfer.files)); });
 
 restoreDocuments();
+window.mojianDesktop?.onCloseDocument?.(() => closeDocument());
 window.addEventListener('beforeunload', saveDocuments);
 window.addEventListener('pagehide', saveDocuments);
 
@@ -845,6 +944,7 @@ if (window.mojianDesktop) {
     const decoded = decodeBytes(bytes, encoding);
     if (decoded === null) return;
     openDocument({ name: file.name, content: decoded, encoding, path: file.path || null, bytes });
+    if (file.fragment) requestAnimationFrame(() => scrollPreviewToFragment(file.fragment));
     saveDocuments();
     showToast(`已打开 ${file.name}`);
   });
