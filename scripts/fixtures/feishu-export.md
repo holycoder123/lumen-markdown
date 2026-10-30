@@ -155,6 +155,7 @@ flowchart LR
 <script>window.__feishuUnsafe = true</script>
 <style>body { display: none }</style>
 <iframe src="https://lumen-test.invalid/frame"></iframe>
+<button class="table-expand-button" data-preview-ui="malicious" onclick="window.__feishuUnsafe = true">不可信按钮</button>
 
 <p id="evil-id" onclick="window.__feishuUnsafe = true" style="position: fixed; top: 0; left: 0; z-index: 999999; background-image: url(https://lumen-test.invalid/tracker); color: #123456;">危险样式内容</p>
 

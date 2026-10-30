@@ -3,6 +3,8 @@ const { contextBridge, ipcRenderer, webUtils } = require('electron');
 contextBridge.exposeInMainWorld('mojianDesktop', {
   onOpenFile(callback) { ipcRenderer.on('open-file', (_event, file) => callback(file)); },
   onCloseDocument(callback) { ipcRenderer.on('close-document', () => callback()); },
+  onFileChanged(callback) { ipcRenderer.on('file-changed', (_event, file) => callback(file)); },
+  watchFiles(paths) { ipcRenderer.send('watch-files', paths); },
   getPathForFile(file) { try { return webUtils.getPathForFile(file); } catch (_) { return ''; } },
   resolveImageUrl(target, sourceFile) { return ipcRenderer.invoke('resolve-image-url', target, sourceFile); },
   resolveMediaUrl(target, sourceFile) { return ipcRenderer.invoke('resolve-media-url', target, sourceFile); },

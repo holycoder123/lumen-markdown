@@ -2,7 +2,7 @@ const { app, BrowserWindow, dialog, ipcMain, shell, protocol, net } = require('e
 const fs = require('node:fs');
 const path = require('node:path');
 const { fileURLToPath, pathToFileURL } = require('node:url');
-const { randomUUID } = require('node:crypto');
+const { randomUUID, createHash } = require('node:crypto');
 const iconv = require('iconv-lite');
 
 let mainWindow;
@@ -11,6 +11,8 @@ const imageFiles = new Map();
 const imageUrls = new Map();
 const mediaFiles = new Map();
 const mediaUrls = new Map();
+const watchedFiles = new Map();
+const maxMarkdownBytes = 5 * 1024 * 1024;
 const imageExtensions = new Set(['.png', '.jpg', '.jpeg', '.gif', '.webp', '.bmp', '.ico', '.svg', '.avif', '.apng']);
 const mediaExtensions = new Set(['.mp4', '.m4v', '.webm', '.ogg', '.ogv', '.mov', '.mp3', '.wav', '.m4a', '.aac', '.flac', '.oga', '.opus']);
 app.setName('Lumen');
@@ -28,8 +30,84 @@ function markdownPath(value, workingDirectory = process.cwd()) {
   } catch (_) { return null; }
 }
 function readMarkdown(filePath) {
-  try { return { name: path.basename(filePath), bytes: fs.readFileSync(filePath).toString('base64'), path: filePath }; }
+  try {
+    const bytes = fs.readFileSync(filePath);
+    return { name: path.basename(filePath), bytes: bytes.toString('base64'), revision: createHash('sha256').update(bytes).digest('hex'), path: filePath };
+  }
   catch (error) { dialog.showErrorBox('无法打开 Markdown 文件', `${filePath}\n\n${error.message}`); return null; }
+}
+function fileWatchKey(filePath) {
+  return process.platform === 'win32' ? filePath.toLowerCase() : filePath;
+}
+function clearFileWatches() {
+  for (const entry of watchedFiles.values()) {
+    clearTimeout(entry.timer);
+    fs.unwatchFile(entry.path, entry.listener);
+  }
+  watchedFiles.clear();
+}
+function scheduleFileCheck(entry) {
+  clearTimeout(entry.timer);
+  entry.timer = setTimeout(() => checkWatchedFile(entry), 200);
+}
+async function checkWatchedFile(entry) {
+  if (watchedFiles.get(entry.key) !== entry) return;
+  if (entry.reading) { entry.checkAgain = true; return; }
+  entry.reading = true;
+  try {
+    let snapshot;
+    try {
+      const before = await fs.promises.stat(entry.path);
+      if (!before.isFile() || before.size > maxMarkdownBytes) {
+        snapshot = { status: before.size > maxMarkdownBytes ? 'too-large' : 'unreadable' };
+      } else {
+        const bytes = await fs.promises.readFile(entry.path);
+        const after = await fs.promises.stat(entry.path);
+        // Retry writes still in progress; polling the path also survives atomic
+        // save-by-rename, deletion and recreation used by external editors.
+        if (before.size !== after.size || before.mtimeMs !== after.mtimeMs || before.ctimeMs !== after.ctimeMs || bytes.length !== after.size) {
+          entry.checkAgain = true;
+          return;
+        }
+        snapshot = { status: 'changed', bytes: bytes.toString('base64'), revision: createHash('sha256').update(bytes).digest('hex') };
+      }
+    } catch (error) {
+      snapshot = { status: error.code === 'ENOENT' || error.code === 'ENOTDIR' ? 'missing' : 'unreadable' };
+    }
+    if (watchedFiles.get(entry.key) !== entry || !mainWindow || mainWindow.webContents.isDestroyed() || mainWindow.webContents.isLoading()) return;
+    const signature = snapshot.revision || snapshot.status;
+    if (entry.lastSignature === signature) return;
+    entry.lastSignature = signature;
+    mainWindow.webContents.send('file-changed', { path: entry.path, ...snapshot });
+  } finally {
+    entry.reading = false;
+    if (entry.checkAgain && watchedFiles.get(entry.key) === entry) {
+      entry.checkAgain = false;
+      scheduleFileCheck(entry);
+    }
+  }
+}
+function syncFileWatches(paths) {
+  const requested = new Map();
+  for (const value of paths) {
+    if (typeof value !== 'string' || !path.isAbsolute(value) || value.includes('\0')) continue;
+    const resolved = markdownPath(value);
+    if (resolved) requested.set(fileWatchKey(resolved), resolved);
+  }
+  for (const [key, entry] of watchedFiles) {
+    if (requested.has(key)) continue;
+    clearTimeout(entry.timer);
+    fs.unwatchFile(entry.path, entry.listener);
+    watchedFiles.delete(key);
+  }
+  for (const [key, filePath] of requested) {
+    if (watchedFiles.has(key)) continue;
+    const entry = { key, path: filePath, lastSignature: null, reading: false, checkAgain: false };
+    entry.listener = () => scheduleFileCheck(entry);
+    watchedFiles.set(key, entry);
+    fs.watchFile(filePath, { persistent: false, interval: 750 }, entry.listener);
+    scheduleFileCheck(entry);
+  }
 }
 function filesFromArgs(argv, workingDirectory) {
   return [...new Set(argv.map(value => markdownPath(value, workingDirectory)).filter(Boolean))];
@@ -136,9 +214,14 @@ function createWindow() {
     }
   });
   mainWindow.loadFile('index.html');
+  mainWindow.webContents.on('did-start-loading', clearFileWatches);
   mainWindow.webContents.on('did-finish-load', () => { for (const file of pendingFiles.splice(0)) mainWindow.webContents.send('open-file', file); });
-  mainWindow.on('closed', () => { mainWindow = null; imageFiles.clear(); imageUrls.clear(); mediaFiles.clear(); mediaUrls.clear(); });
+  mainWindow.on('focus', () => { for (const entry of watchedFiles.values()) scheduleFileCheck(entry); });
+  mainWindow.on('closed', () => { clearFileWatches(); mainWindow = null; imageFiles.clear(); imageUrls.clear(); mediaFiles.clear(); mediaUrls.clear(); });
 }
+ipcMain.on('watch-files', (event, paths) => {
+  if (event.sender === mainWindow?.webContents && Array.isArray(paths)) syncFileWatches(paths);
+});
 
 if (!app.requestSingleInstanceLock()) app.quit();
 else {

@@ -129,6 +129,35 @@ async function runElectron() {
   async function setContent(value) {
     await js(`document.querySelector('#editor').value = ${JSON.stringify(value)}; document.querySelector('#editor').dispatchEvent(new Event('input', { bubbles:true }));`);
   }
+  async function setSearchInput(selector, value) {
+    await js(`document.querySelector(${JSON.stringify(selector)}).value = ${JSON.stringify(value)}; document.querySelector(${JSON.stringify(selector)}).dispatchEvent(new Event('input', { bubbles:true }));`);
+  }
+  async function searchState() {
+    return js(`({ hidden:document.querySelector('#searchPanel').hidden, replaceHidden:document.querySelector('#replaceRow').hidden, status:document.querySelector('#searchStatus').textContent.trim(), focus:document.activeElement.id, matchCase:document.querySelector('#matchCaseInput').checked })`);
+  }
+  async function searchHighlightState() {
+    return js(`(() => {
+      const editor = document.querySelector('#editor'), overlay = document.querySelector('#searchHighlights'), content = document.querySelector('#searchHighlightContent');
+      const viewport = editor.getBoundingClientRect(), transform = getComputedStyle(content).transform;
+      const rectangles = [...content.children].map(element => element.getBoundingClientRect());
+      return { hidden:overlay.hidden, count:rectangles.length, translateY:transform === 'none' ? 0 : new DOMMatrixReadOnly(transform).m42, scrollTop:editor.scrollTop, visible:rectangles.some(rect => rect.width > 0 && rect.height > 0 && rect.top < viewport.bottom && rect.bottom > viewport.top && rect.left < viewport.right && rect.right > viewport.left) };
+    })()`);
+  }
+  async function previewSearchHighlightState() {
+    return js(`(() => {
+      const root = document.querySelector('#preview'), viewport = root.getBoundingClientRect();
+      const active = [...(CSS.highlights.get('lumen-preview-search-active') || [])];
+      const ranges = [...CSS.highlights].filter(([name]) => name.startsWith('lumen-preview-search')).flatMap(([, highlight]) => [...highlight]);
+      const rectangles = active.flatMap(range => [...range.getClientRects()]);
+      return { active:active.map(range => range.toString()), count:ranges.length, connected:ranges.every(range => root.contains(range.startContainer) && root.contains(range.endContainer)), scrollTop:root.scrollTop, visible:rectangles.some(rect => rect.width > 0 && rect.height > 0 && rect.top < viewport.bottom && rect.bottom > viewport.top && rect.left < viewport.right && rect.right > viewport.left) };
+    })()`);
+  }
+  async function searchKey(selector, key, shiftKey = false) {
+    await js(`document.querySelector(${JSON.stringify(selector)}).dispatchEvent(new KeyboardEvent('keydown', { key:${JSON.stringify(key)}, shiftKey:${shiftKey}, bubbles:true, cancelable:true }));`);
+  }
+  async function animationFrames() {
+    await js('new Promise(resolve => requestAnimationFrame(() => requestAnimationFrame(() => resolve(true))))');
+  }
   async function rename(value) {
     await click('#documentName');
     await js(`document.querySelector('#documentName').textContent = ${JSON.stringify(value)}; document.querySelector('#documentName').blur();`);
@@ -188,7 +217,7 @@ async function runElectron() {
       return tab && tab.left >= tabs.left - 1 && tab.right <= tabs.right + 1;
     })()`), `Resized selected document tab becomes visible at ${width}x${height}`, 1500);
     const layout = await js(`(() => {
-      const selectors = ['#newDocumentButton','#uploadButton','#downloadButton','#themeButton','#defaultAppButton','#documentName','#documentTabs','#reopenDocumentButton','#editModeButton','#previewModeButton','#splitModeButton','#insertImageButton','#encodingSelect','#documentFooter'];
+      const selectors = ['#newDocumentButton','#uploadButton','#downloadButton','#themeButton','#defaultAppButton','#documentName','#documentTabs','#reopenDocumentButton','#editModeButton','#previewModeButton','#splitModeButton','#insertImageButton','#encodingSelect','#documentFooter','#findButton','#searchPanel','#searchInput','#replaceInput','#toggleReplaceButton','#matchCaseInput','#searchStatus','#previousMatchButton','#nextMatchButton','#replaceButton','#replaceAllButton','#closeSearchButton'];
       const bounds = selectors.flatMap(selector => {
         const element = document.querySelector(selector), rect = element.getBoundingClientRect();
         return rect.width && rect.height ? [{ selector, left:rect.left, top:rect.top, right:rect.right, bottom:rect.bottom }] : [];
@@ -281,6 +310,10 @@ async function runElectron() {
     await reload();
     assert.equal((await state()).tabs.length, 0, 'An intentionally empty workspace stays empty after reload');
     await previewMode();
+    assert.equal(await js("document.querySelector('#findButton').disabled"), true, 'Search is disabled without an open document');
+    await shortcut('f');
+    await shortcut('h');
+    assert.equal((await searchState()).hidden, true, 'Find and replace shortcuts keep the empty workspace unchanged');
     const openedFromEmptyPath = path.join(profile, 'opened-from-empty.md');
     fs.writeFileSync(openedFromEmptyPath, '# 从空白工作区打开文件');
     await openNativeFile(openedFromEmptyPath);
@@ -306,6 +339,527 @@ async function runElectron() {
     await closeDocument(openedFromEmptyId);
     assert.equal(await activeId(), starterId, 'Closing a background document keeps the active document');
     console.log('PASS: close button accessibility, failed storage rollback, final-tab close, empty reload, blank creation and close/reopen shortcuts');
+
+    assert.equal((await searchState()).hidden, true, 'Search panel starts closed');
+    await click('#newDocumentButton');
+    const searchDocumentId = await activeId();
+    await setContent('Alpha alpha ALPHA 中文中文 .*+$ .*+$');
+    await click('#previewModeButton');
+    await nativeShortcut('f');
+    await animationFrames();
+    await previewMode();
+    assert.equal((await searchState()).hidden, false, 'Native Ctrl+F opens find');
+    assert.equal((await searchState()).replaceHidden, true, 'Find initially keeps replacement controls collapsed');
+    assert.equal((await searchState()).focus, 'searchInput', 'Find input retains focus after the view mode animation frame');
+    assert.equal((await searchState()).status, '输入要查找的文本');
+    await click('#editModeButton');
+    assert.equal((await searchState()).hidden, false, 'Switching to edit keeps the open find panel');
+    await js("document.querySelector('#editor').setSelectionRange(0, 0)");
+    await setSearchInput('#searchInput', 'alpha');
+    assert.equal((await searchState()).status, '1 / 3', 'Find is case insensitive by default');
+    assert.deepEqual((await state()).selection, [0, 5]);
+    await poll(async () => {
+      const highlight = await searchHighlightState();
+      return !highlight.hidden && highlight.count > 0 && highlight.visible;
+    }, 'The active match remains visibly highlighted while the find input has focus');
+    assert.equal((await searchState()).focus, 'searchInput', 'Highlighting the active match does not steal find input focus');
+    await searchKey('#searchInput', 'Enter');
+    assert.deepEqual((await state()).selection, [6, 11], 'Enter selects the next occurrence');
+    await searchKey('#searchInput', 'Enter', true);
+    assert.deepEqual((await state()).selection, [0, 5], 'Shift+Enter selects the previous occurrence');
+    await click('#previousMatchButton');
+    assert.deepEqual((await state()).selection, [12, 17], 'Previous wraps from the first to the last match');
+    await click('#nextMatchButton');
+    assert.deepEqual((await state()).selection, [0, 5], 'Next wraps from the last to the first match');
+    await click('#matchCaseInput');
+    assert.equal((await searchState()).status, '1 / 1', 'Case-sensitive search distinguishes differently cased text');
+    assert.deepEqual((await state()).selection, [6, 11]);
+    await click('#matchCaseInput');
+    await setSearchInput('#searchInput', '中文');
+    assert.equal((await searchState()).status, '1 / 2', 'Chinese text can be found in adjacent occurrences');
+    await setSearchInput('#searchInput', '.*+$');
+    assert.equal((await searchState()).status, '1 / 2', 'Search treats regular expression characters as literal text');
+    await click('#toggleReplaceButton');
+    assert.equal((await searchState()).replaceHidden, false, 'The replace toggle reveals replacement controls');
+    await setSearchInput('#replaceInput', '$&');
+    await click('#replaceAllButton');
+    assert.equal((await state()).content, 'Alpha alpha ALPHA 中文中文 $& $&', 'Replace all inserts dollar replacement syntax literally');
+    await nativeShortcut('z');
+    await poll(async () => (await state()).content === 'Alpha alpha ALPHA 中文中文 .*+$ .*+$', 'Replace all can be undone as a native editing action');
+
+    await setContent('cat cat');
+    await js("document.querySelector('#editor').setSelectionRange(0, 0)");
+    await setSearchInput('#searchInput', 'cat');
+    await setSearchInput('#replaceInput', 'catcat');
+    await searchKey('#replaceInput', 'Enter');
+    assert.equal((await state()).content, 'catcat cat', 'Enter in replacement input replaces one occurrence');
+    assert.deepEqual((await state()).selection, [7, 10], 'Replacing with text containing the query advances beyond inserted text');
+    await click('#replaceButton');
+    assert.equal((await state()).content, 'catcat catcat', 'The next replacement reaches the following original occurrence');
+    await setSearchInput('#replaceInput', '');
+    await click('#replaceAllButton');
+    assert.equal((await state()).content, ' ', 'An empty replacement deletes every occurrence');
+    assert.equal((await searchState()).status, '无匹配结果');
+    assert.equal((await searchHighlightState()).hidden, true, 'No-match searches hide the active match highlight');
+    await setContent('aaaa');
+    await setSearchInput('#searchInput', 'aa');
+    assert.equal((await searchState()).status, '1 / 2', 'Search finds non-overlapping occurrences');
+    await setSearchInput('#replaceInput', 'x');
+    await click('#replaceAllButton');
+    assert.equal((await state()).content, 'xx', 'Replace all uses the original non-overlapping matches');
+    await setSearchInput('#searchInput', '');
+    assert.equal((await searchState()).status, '输入要查找的文本');
+    assert.equal(await js("document.querySelector('#replaceAllButton').disabled"), true, 'Empty find text disables replace all');
+    assert.equal((await searchHighlightState()).hidden, true, 'An empty query hides the active match highlight');
+
+    const scrollNeedle = 'LUMEN_SCROLL_目标';
+    for (const [label, content] of [
+      ['many lines', `${Array.from({ length: 250 }, (_, index) => `第 ${index + 1} 行普通内容`).join('\n')}\n${scrollNeedle}`],
+      ['one soft-wrapped paragraph', `${'连续文字与 spaces '.repeat(1400)}${scrollNeedle}`]
+    ]) {
+      await setContent(content);
+      await js("document.querySelector('#editor').scrollTop = 0; document.querySelector('#editor').setSelectionRange(0, 0)");
+      await setSearchInput('#searchInput', scrollNeedle);
+      await poll(async () => js("document.querySelector('#editor').scrollTop > 0"), `Distant match is revealed in ${label}`);
+      assert.deepEqual((await state()).selection, [content.indexOf(scrollNeedle), content.indexOf(scrollNeedle) + scrollNeedle.length], `The distant match is selected in ${label}`);
+      await poll(async () => {
+        const highlight = await searchHighlightState();
+        return !highlight.hidden && highlight.count > 0 && highlight.visible && Math.abs(highlight.translateY + highlight.scrollTop) < 1;
+      }, `The visible match highlight follows textarea scrolling in ${label}`);
+      if (label === 'many lines') assert.equal(await js("Math.abs(document.querySelector('#editor').scrollTop - document.querySelector('#lineNumbers').scrollTop) < 1"), true, 'Line numbers remain aligned after revealing a distant line');
+    }
+
+    const tabSearchText = 'LUMEN_FIND_唯一';
+    await setSearchInput('#searchInput', tabSearchText);
+    await setContent(`${tabSearchText} ${tabSearchText}`);
+    assert.match((await searchState()).status, /(?:[12] \/ 2|2 处匹配)/, 'Editor input refreshes the open search results');
+    await select(starterId);
+    assert.equal((await searchState()).status, '无匹配结果', 'Switching documents discards matches from the previous document');
+    await select(searchDocumentId);
+    assert.match((await searchState()).status, /(?:[12] \/ 2|2 处匹配)/, 'Returning to a document searches its current content');
+    await setSearchInput('#replaceInput', '替换完成');
+    await click('#replaceAllButton');
+    await saved();
+    assert.equal((await documentStorage()).documents.find(document => document.id === searchDocumentId).content, '替换完成 替换完成', 'Replacement content is automatically persisted');
+    assert.equal((await documentStorage()).documents.find(document => document.id === starterId).content, starterContent, 'Replacement leaves the other document draft unchanged');
+    await searchKey('#searchInput', 'Escape');
+    assert.equal((await searchState()).hidden, true, 'Escape closes find and replace');
+    assert.equal((await searchHighlightState()).hidden, true, 'Closing find hides its match highlight');
+    assert.equal((await searchState()).focus, 'editor', 'Closing find restores editor focus');
+    await click('#previewModeButton');
+    await nativeShortcut('h');
+    await animationFrames();
+    assert.equal((await state()).editHidden, false, 'Native Ctrl+H reveals the editor from preview');
+    assert.equal((await searchState()).hidden, false, 'Native Ctrl+H opens search');
+    assert.equal((await searchState()).replaceHidden, false, 'Native Ctrl+H expands replacement controls');
+    assert.ok(['searchInput', 'replaceInput'].includes((await searchState()).focus), 'Replace input focus survives the view mode animation frame');
+    await setContent('# 搜索与替换\n\n在当前文档中查找文本，快速定位每一处匹配。\n\n- 支持中文文本与大小写匹配\n- 使用 Enter 查找下一处文本\n- 可单次替换，也可全部替换\n\n编辑后会自动保存本机草稿。');
+    await setSearchInput('#searchInput', '文本');
+    await setSearchInput('#replaceInput', '内容');
+    const originalSearchTheme = await js('document.documentElement.dataset.theme');
+    for (const theme of ['light', 'dark']) {
+      if (await js('document.documentElement.dataset.theme') !== theme) await click('#themeButton');
+      for (const [width, height] of [[900, 620], [1280, 820]]) {
+        await checkLayout(width, height);
+        if (process.env.LUMEN_TEST_SCREENSHOTS && ((theme === 'dark' && width === 900) || (theme === 'light' && width === 1280))) {
+          fs.mkdirSync(process.env.LUMEN_TEST_SCREENSHOTS, { recursive: true });
+          fs.writeFileSync(path.join(process.env.LUMEN_TEST_SCREENSHOTS, `search-${width}x${height}-${theme}.png`), (await wc.capturePage()).toPNG());
+        }
+      }
+    }
+    if (await js('document.documentElement.dataset.theme') !== originalSearchTheme) await click('#themeButton');
+    await click('#closeSearchButton');
+    assert.equal((await searchState()).hidden, true, 'The close button closes search');
+    await click('#findButton');
+    assert.equal((await searchState()).hidden, false, 'The toolbar button opens search');
+    await click('#previewModeButton');
+    assert.equal((await searchState()).hidden, false, 'Selecting preview keeps the open find panel');
+    await click('#closeSearchButton');
+    await closeDocument(searchDocumentId);
+    assert.equal(await activeId(), starterId, 'Search checks restore the original active document');
+    console.log('PASS: native find/replace shortcuts and focus, literal/case/Unicode matching, circular navigation, literal/empty/undoable replacements, long/soft-wrapped match scrolling, live tab results, persistence and both-theme search layout');
+
+    await click('#newDocumentButton');
+    const previewSearchDocumentId = await activeId();
+    const previewNeedle = 'LUMEN_PREVIEW_SCROLL_目标';
+    const previewSearchSource = [
+      '# 预览查找回归',
+      'Alpha alpha ALPHA 中文中文 .\\*+$ .\\*+$',
+      'hello **world** and `inline code`',
+      '[可见链接](https://lumen-test.invalid/source-only-url-729)',
+      'blocktop',
+      'blockbottom',
+      '<details><summary>可展开摘要</summary><p>隐藏详情秘文</p></details>',
+      '<span style="white-space:pre-line">独行甲\n独行乙</span>',
+      ...Array.from({ length:120 }, (_, index) => `第 ${index + 1} 段用于滚动定位。`),
+      previewNeedle
+    ].join('\n\n');
+    await setContent(previewSearchSource);
+    await click('#previewModeButton');
+    const previewHtmlBeforeSearch = await js("document.querySelector('#preview').innerHTML");
+    await nativeShortcut('f');
+    await animationFrames();
+    await previewMode();
+    assert.equal((await searchState()).hidden, false, 'Native Ctrl+F opens find within preview');
+    assert.equal((await searchState()).replaceHidden, true, 'Preview find starts without replacement controls');
+    assert.equal((await searchState()).focus, 'searchInput');
+    await setSearchInput('#searchInput', 'alpha');
+    assert.equal((await searchState()).status, '1 / 3', 'Preview finds rendered text without changing mode');
+    assert.deepEqual((await previewSearchHighlightState()).active, ['Alpha']);
+    assert.equal((await previewSearchHighlightState()).connected, true, 'Preview highlight ranges belong to the rendered document');
+    await searchKey('#searchInput', 'Enter');
+    assert.equal((await searchState()).status, '2 / 3');
+    assert.deepEqual((await previewSearchHighlightState()).active, ['alpha']);
+    await searchKey('#searchInput', 'Enter', true);
+    assert.equal((await searchState()).status, '1 / 3');
+    await click('#previousMatchButton');
+    assert.equal((await searchState()).status, '3 / 3', 'Previous wraps to the final preview match');
+    assert.deepEqual((await previewSearchHighlightState()).active, ['ALPHA']);
+    await click('#nextMatchButton');
+    assert.equal((await searchState()).status, '1 / 3', 'Next wraps to the first preview match');
+    await click('#matchCaseInput');
+    assert.equal((await searchState()).status, '1 / 1', 'Preview respects case-sensitive matching');
+    assert.deepEqual((await previewSearchHighlightState()).active, ['alpha']);
+    await click('#matchCaseInput');
+    for (const [query, status] of [['中文', '1 / 2'], ['.*+$', '1 / 2'], ['hello world', '1 / 1'], ['inline code', '1 / 1'], ['可见链接', '1 / 1'], ['可展开摘要', '1 / 1']]) {
+      await setSearchInput('#searchInput', query);
+      assert.equal((await searchState()).status, status, `Preview matches ${JSON.stringify(query)} as visible literal text`);
+      assert.deepEqual((await previewSearchHighlightState()).active, [query], 'A DOM range can span inline formatting while preserving the visible text');
+    }
+    for (const query of ['source-only-url-729', 'blocktopblockbottom', 'blocktop blockbottom', '独行甲 独行乙', '隐藏详情秘文']) {
+      await setSearchInput('#searchInput', query);
+      assert.equal((await searchState()).status, '无匹配结果', `Preview does not match hidden content, link destinations or join separate blocks: ${query}`);
+      assert.equal((await previewSearchHighlightState()).count, 0, 'A no-match query clears every preview highlight');
+    }
+    await click('#preview details summary');
+    await poll(async () => (await searchState()).status === '1 / 1', 'Opening details adds its newly visible text to preview search');
+    assert.deepEqual((await previewSearchHighlightState()).active, ['隐藏详情秘文']);
+    await click('#preview details summary');
+    await poll(async () => (await searchState()).status === '无匹配结果', 'Closing details removes its hidden text from preview search');
+    assert.equal((await previewSearchHighlightState()).count, 0);
+    await setSearchInput('#searchInput', 'hello world');
+    assert.equal(await js("document.querySelector('#preview').innerHTML"), previewHtmlBeforeSearch, 'Search highlights never insert wrappers into rendered HTML');
+    await js(`window.__previewSearchWriteTextDescriptor = Object.getOwnPropertyDescriptor(navigator.clipboard, 'writeText'); Object.defineProperty(navigator.clipboard, 'writeText', { configurable:true, value:async value => { window.__previewSearchCopiedHtml = value; } });`);
+    try {
+      await click('#copyHtmlButton');
+      assert.equal(await js('window.__previewSearchCopiedHtml'), previewHtmlBeforeSearch, 'Copy HTML excludes all preview search highlighting');
+    } finally {
+      await js(`if (window.__previewSearchWriteTextDescriptor) Object.defineProperty(navigator.clipboard, 'writeText', window.__previewSearchWriteTextDescriptor); else delete navigator.clipboard.writeText; delete window.__previewSearchWriteTextDescriptor; delete window.__previewSearchCopiedHtml;`);
+    }
+    assert.equal((await state()).content, previewSearchSource, 'Preview searching leaves the Markdown source unchanged');
+    await js("document.querySelector('#preview').scrollTop = 0");
+    await setSearchInput('#searchInput', previewNeedle);
+    await poll(async () => {
+      const highlight = await previewSearchHighlightState();
+      return highlight.scrollTop > 0 && highlight.visible && highlight.active[0] === previewNeedle;
+    }, 'A distant preview match is scrolled into the preview viewport');
+    assert.equal((await searchState()).focus, 'searchInput', 'Preview scrolling keeps focus in the find input');
+
+    await setSearchInput('#searchInput', 'hello world');
+    if (process.env.LUMEN_TEST_SCREENSHOTS) {
+      const initialPreviewTheme = await js('document.documentElement.dataset.theme');
+      fs.mkdirSync(process.env.LUMEN_TEST_SCREENSHOTS, { recursive:true });
+      for (const [theme, width, height] of [['light', 1280, 820], ['dark', 900, 620]]) {
+        if (await js('document.documentElement.dataset.theme') !== theme) await click('#themeButton');
+        await animationFrames();
+        await checkLayout(width, height);
+        await saved();
+        await poll(async () => js("!document.querySelector('#toast').classList.contains('show')"), 'Preview screenshot toast has finished');
+        await poll(async () => (await previewSearchHighlightState()).visible, 'Preview screenshot shows its active match');
+        const screenshotPath = path.join(process.env.LUMEN_TEST_SCREENSHOTS, `preview-search-${width}x${height}-${theme}.png`);
+        fs.writeFileSync(screenshotPath, (await wc.capturePage()).toPNG());
+        console.log(`SCREENSHOT: ${screenshotPath}`);
+      }
+      if (await js('document.documentElement.dataset.theme') !== initialPreviewTheme) await click('#themeButton');
+      await animationFrames();
+    }
+    await click('#splitModeButton');
+    await animationFrames();
+    assert.equal((await searchState()).hidden, false, 'Switching to split preserves find');
+    assert.equal((await searchState()).status, '无匹配结果', 'Split view searches source rather than joining Markdown formatting');
+    assert.equal((await previewSearchHighlightState()).count, 0, 'Source search clears preview ranges');
+    await click('#previewModeButton');
+    await animationFrames();
+    assert.equal((await searchState()).status, '1 / 1', 'Returning to preview searches the rendered text again');
+    const previewSearchTheme = await js('document.documentElement.dataset.theme');
+    await click('#themeButton');
+    await animationFrames();
+    assert.equal((await searchState()).status, '1 / 1', 'Theme re-render preserves the preview match count');
+    assert.deepEqual((await previewSearchHighlightState()).active, ['hello world']);
+    assert.equal((await previewSearchHighlightState()).connected, true, 'Theme re-render replaces stale highlight ranges');
+    await click('#themeButton');
+    await animationFrames();
+    assert.equal(await js('document.documentElement.dataset.theme'), previewSearchTheme);
+    await select(starterId);
+    await animationFrames();
+    assert.equal((await searchState()).hidden, false, 'Document switches preserve find');
+    assert.equal((await searchState()).status, '无匹配结果', 'Preview document switches clear the previous document matches');
+    assert.equal((await previewSearchHighlightState()).count, 0);
+    await select(previewSearchDocumentId);
+    await animationFrames();
+    assert.equal((await searchState()).status, '1 / 1', 'Returning to a preview document rebuilds its match ranges');
+    assert.deepEqual((await previewSearchHighlightState()).active, ['hello world']);
+    await setSearchInput('#searchInput', '');
+    assert.equal((await previewSearchHighlightState()).count, 0, 'An empty preview query clears its highlight ranges');
+    await setSearchInput('#searchInput', 'hello world');
+    await searchKey('#searchInput', 'Escape');
+    assert.equal((await searchState()).hidden, true, 'Escape closes preview search');
+    assert.equal((await previewSearchHighlightState()).count, 0, 'Closing preview search clears its highlight ranges');
+    assert.equal((await searchState()).focus, 'preview', 'Closing preview search returns focus to the preview');
+    await shortcut('f');
+    await setSearchInput('#searchInput', 'source-only-url-729');
+    assert.equal((await searchState()).status, '无匹配结果');
+    await click('#toggleReplaceButton');
+    assert.equal((await state()).editHidden, false, 'Expanding replacement from preview switches to the source editor');
+    assert.equal((await searchState()).replaceHidden, false);
+    assert.match((await searchState()).status, /^(?:1 \/ 1|1 处匹配)$/, 'Replacement searches the Markdown source including link destinations');
+    assert.equal((await previewSearchHighlightState()).count, 0);
+    await click('#closeSearchButton');
+    await closeDocument(previewSearchDocumentId);
+    assert.equal(await activeId(), starterId, 'Preview search checks restore the original active document');
+    console.log('PASS: preview find stays in preview, highlights real DOM ranges across inline formatting, searches visible text only, wraps navigation, scrolls distant matches, keeps HTML/source unchanged and refreshes through mode/document/theme changes');
+
+    await click('#newDocumentButton');
+    const layoutDocumentId = await activeId();
+    const workspaceFixture = fs.readFileSync(path.join(__dirname, 'fixtures', 'workspace-tables.md'), 'utf8');
+    const extraTableRows = Array.from({ length:32 }, (_, index) => `| 扩展条目 ${index + 1} | 示例负责人 | P1 | 进行中 | 11 月 | 50% | 协作组 | 完整读取 | v1.1 | 无 | 记录 | 末列标记-${index + 1} |`).join('\n');
+    const nestedTable = '<table><tbody><tr><td>父表说明</td><td><table><tbody><tr>' + Array.from({ length:8 }, (_, index) => `<td>嵌套列 ${index + 1}：${'连续内容'.repeat(15)}</td>`).join('') + '</tr></tbody></table></td></tr></tbody></table>';
+    const layoutSource = workspaceFixture.replace('\n\n## 接口与字段', '\n' + extraTableRows + '\n\n## 接口与字段') + '\n\n## 嵌套表格\n\n' + nestedTable;
+    await setContent(layoutSource);
+    await rename('产品迭代计划.md');
+    await click('#previewModeButton');
+    await animationFrames();
+    const layoutTheme = await js('document.documentElement.dataset.theme');
+    const originalWidthPreference = await js("localStorage.getItem('lumen-reading-width')");
+    const originalOutlinePreference = await js("localStorage.getItem('lumen-outline-open')");
+    for (const theme of ['light', 'dark']) {
+      if (await js('document.documentElement.dataset.theme') !== theme) await click('#themeButton');
+      for (const mode of ['preview', 'split']) {
+        await click(`#${mode}ModeButton`);
+        for (const [width, height] of [[900, 620], [1280, 820]]) {
+          await checkLayout(width, height);
+          const tables = await js(`(() => {
+            const root = document.querySelector('#preview'), viewport = root.getBoundingClientRect();
+            return [...root.querySelectorAll('table')].map(table => {
+              const scroll = table.parentElement, card = scroll.parentElement, rect = scroll.getBoundingClientRect();
+              return { wrapped:scroll.classList.contains('table-scroll') && card.classList.contains('table-wrap'), nested:!!card.closest('td,th'), left:rect.left, right:rect.right, min:viewport.left, max:viewport.right, width:scroll.clientWidth, overflow:scroll.scrollWidth > scroll.clientWidth + 1, columns:table.rows[0].cells.length };
+            });
+          })()`);
+          assert.equal(tables.length, 4, 'GFM, HTML and nested HTML tables all remain present');
+          assert.ok(tables.every(table => table.wrapped), 'Every table has its own constrained scroll region');
+          assert.ok(tables.every(table => table.width > 0 && (table.nested || (table.left >= table.min - 1 && table.right <= table.max + 1))), `Outer table scrollers fit inside the preview and nested tables have their own scroller at ${width}px in ${mode}: ${JSON.stringify(tables)}`);
+          assert.equal(tables[0].overflow, true, 'The wide table scrolls locally rather than stretching the pane');
+          const lastCell = await js(`(() => {
+            const table = document.querySelector('#preview table'), scroll = table.parentElement;
+            scroll.scrollLeft = scroll.scrollWidth;
+            const last = table.rows[0].cells[table.rows[0].cells.length - 1].getBoundingClientRect(), viewport = scroll.getBoundingClientRect();
+            return { visible:last.right <= viewport.right + 1 && last.left < viewport.right, left:scroll.scrollLeft };
+          })()`);
+          assert.equal(lastCell.visible, true, 'The final column can be reached in every theme/window/view combination');
+          assert.ok(lastCell.left > 0);
+        }
+      }
+    }
+    await click('#previewModeButton');
+    await animationFrames();
+    await js("document.querySelector('#preview table').parentElement.scrollLeft = 0; document.querySelector('#preview').scrollTop = 0");
+    await animationFrames();
+    await poll(async () => js("!document.querySelector('#preview .table-scrollbar').hidden"), 'Wide tables expose a top scrollbar');
+    await js("document.querySelector('#preview .table-scrollbar').scrollLeft = 200");
+    await poll(async () => js("Math.abs(document.querySelector('#preview .table-scroll').scrollLeft - document.querySelector('#preview .table-scrollbar').scrollLeft) < 2 && document.querySelector('#preview .table-scroll').scrollLeft > 0"), 'The top scrollbar scrolls the complete table');
+    const cellCountBefore = await js("document.querySelectorAll('#preview td, #preview th').length");
+    await click('#preview .table-expand-button');
+    await animationFrames();
+    assert.equal(await js("document.querySelector('#tableDialog').open"), true, 'A wide table opens in the modal table view');
+    assert.equal(await js("document.querySelector('#tableDialogContent table').rows[0].cells.length"), 12, 'Expanded view retains every column');
+    const expandedTable = await js(`(() => {
+      const root = document.querySelector('#tableDialogContent'), table = root.querySelector('table');
+      root.scrollLeft = root.scrollWidth; root.scrollTop = root.scrollHeight;
+      const viewport = root.getBoundingClientRect(), header = table.querySelector('thead th').getBoundingClientRect(), last = table.rows[table.rows.length - 1].cells[11].getBoundingClientRect();
+      return { headerTop:header.top, top:viewport.top, final:table.rows[table.rows.length - 1].cells[11].textContent, visible:last.right <= viewport.right + 1 && last.left < viewport.right && last.bottom <= viewport.bottom + 1 && last.top < viewport.bottom };
+    })()`);
+    assert.equal(expandedTable.visible, true, 'The final row and column are both reachable in table view');
+    assert.match(expandedTable.final, /末列标记-32/);
+    assert.ok(Math.abs(expandedTable.headerTop - expandedTable.top) < 2, 'Expanded table header remains visible while scrolling vertically');
+    await searchKey('#tableDialogContent', 'Escape');
+    assert.equal(await js("document.querySelector('#tableDialog').open"), false);
+    assert.equal(await js("document.querySelectorAll('#preview td, #preview th').length"), cellCountBefore, 'Closing table view returns the original cells without duplication');
+    assert.equal((await state()).content, layoutSource, 'Table reading never edits the Markdown source');
+    await js(`window.__tableClipboardDescriptor = Object.getOwnPropertyDescriptor(navigator.clipboard, 'writeText'); Object.defineProperty(navigator.clipboard, 'writeText', { configurable:true, value:async html => { window.__tableExport = html; } });`);
+    try {
+      await click('#copyHtmlButton');
+      const exportCheck = await js(`(() => { const template = document.createElement('template'); template.innerHTML = window.__tableExport; return { cells:template.content.querySelectorAll('td,th').length, ui:!!template.content.querySelector('[data-preview-ui],button,.table-scroll,.table-tools'), merged:!!template.content.querySelector('th[colspan="2"]'), rowspan:!!template.content.querySelector('td[rowspan="2"]') }; })()`);
+      assert.equal(exportCheck.cells, cellCountBefore, 'Copied HTML retains all table cells');
+      assert.equal(exportCheck.ui, false, 'Copied HTML contains document data without table controls');
+      assert.equal(exportCheck.merged && exportCheck.rowspan, true, 'Merged rows and columns survive the redesigned UI');
+    } finally {
+      await js("if (window.__tableClipboardDescriptor) Object.defineProperty(navigator.clipboard, 'writeText', window.__tableClipboardDescriptor); else delete navigator.clipboard.writeText; delete window.__tableClipboardDescriptor; delete window.__tableExport;");
+    }
+    await click('#preview .table-expand-button');
+    await shortcut('f');
+    await animationFrames();
+    assert.equal(await js("document.querySelector('#tableDialog').open"), false, 'Ctrl+F returns the table to the searchable document');
+    await setSearchInput('#searchInput', '末列标记-32');
+    assert.equal((await searchState()).status, '1 / 1');
+    assert.equal((await previewSearchHighlightState()).visible, true, 'Search can reveal a match in a far-right table column');
+    await setSearchInput('#searchInput', '展开表格');
+    assert.equal((await searchState()).status, '无匹配结果', 'Preview search excludes table controls');
+    await click('#closeSearchButton');
+    await click('#preview .table-expand-button');
+    await setContent(workspaceFixture);
+    assert.equal(await js("document.querySelector('#tableDialog').open"), false, 'A content refresh closes stale expanded tables');
+    assert.equal(await js("document.querySelectorAll('#preview table').length"), 2, 'Refresh never reinserts an old table into new content');
+    await checkLayout(1280, 820);
+    if (await js("document.querySelector('#outlineSidebar').hidden")) await click('#outlineButton');
+    assert.equal(await js("document.querySelectorAll('#outlineList [data-heading-id]').length === document.querySelectorAll('#preview h1[id],#preview h2[id],#preview h3[id]').length"), true, 'Outline reflects the rendered document headings');
+    await js("[...document.querySelectorAll('#outlineList button')].find(button => button.textContent === '阅读与校对').click()");
+    await animationFrames();
+    assert.ok(await js("document.querySelector('#preview').scrollTop > 0"), 'Outline navigation scrolls to the selected chapter');
+    await click('#readingWidthButton');
+    assert.equal(await js("document.querySelector('#readingWidthButton').getAttribute('aria-pressed')"), 'false');
+    await reload();
+    assert.equal(await js("document.querySelector('#readingWidthButton').getAttribute('aria-pressed')"), 'false', 'Reading width preference survives reload');
+    await click('#readingWidthButton');
+    if (process.env.LUMEN_TEST_SCREENSHOTS) {
+      for (const [theme, width, height] of [['light', 1440, 960], ['dark', 1280, 820], ['light', 900, 620]]) {
+        if (await js('document.documentElement.dataset.theme') !== theme) await click('#themeButton');
+        await checkLayout(width, height);
+        await js("document.querySelector('#preview').scrollTop = 0; document.querySelector('#preview table').parentElement.scrollLeft = 0");
+        await saved();
+        await poll(async () => js("!document.querySelector('#toast').classList.contains('show')"), 'Workspace screenshot has no temporary toast');
+        fs.mkdirSync(process.env.LUMEN_TEST_SCREENSHOTS, { recursive:true });
+        fs.writeFileSync(path.join(process.env.LUMEN_TEST_SCREENSHOTS, `workspace-${width}x${height}-${theme}.png`), (await wc.capturePage()).toPNG());
+      }
+      await click('#preview .table-expand-button');
+      await animationFrames();
+      await new Promise(resolve => setTimeout(resolve, 100));
+      fs.writeFileSync(path.join(process.env.LUMEN_TEST_SCREENSHOTS, 'workspace-expanded-table.png'), (await wc.capturePage()).toPNG());
+      await click('#closeTableDialogButton');
+    }
+    if (await js('document.documentElement.dataset.theme') !== layoutTheme) await click('#themeButton');
+    await js(`if (${JSON.stringify(originalWidthPreference)} === null) localStorage.removeItem('lumen-reading-width'); else localStorage.setItem('lumen-reading-width', ${JSON.stringify(originalWidthPreference)}); if (${JSON.stringify(originalOutlinePreference)} === null) localStorage.removeItem('lumen-outline-open'); else localStorage.setItem('lumen-outline-open', ${JSON.stringify(originalOutlinePreference)}); setReadingWidth(readPreference('lumen-reading-width', 'wide') === 'wide');`);
+    await closeDocument(layoutDocumentId);
+    await select(starterId);
+    console.log('PASS: redesigned workspace, complete wide/GFM/HTML/nested tables in both themes and views, expanded scrolling/sticky header, safe HTML copy, table search, outline and persisted reading width');
+
+    const syncPath = path.join(profile, '外部 修改同步.md');
+    fs.writeFileSync(syncPath, '# 初始文件\r\n\r\n外部修改测试。');
+    await openNativeFile(syncPath);
+    const syncId = await activeId(), syncTabCount = (await state()).tabs.length;
+    const syncStored = async () => (await documentStorage()).documents.find(document => document.id === syncId);
+    const diskRevision = () => require('node:crypto').createHash('sha256').update(fs.readFileSync(syncPath)).digest('hex');
+    const synced = async text => poll(async () => (await syncStored())?.content === text && (await syncStored())?.diskRevision === diskRevision(), 'External disk version reaches the correct draft');
+    await poll(async () => (await syncStored())?.diskRevision === diskRevision(), 'Native file watcher baseline is registered');
+    assert.equal((await syncStored()).diskDirty, false, 'CRLF normalization does not count as a local edit');
+    await shortcut('f');
+    await animationFrames();
+    await setSearchInput('#searchInput', '初始文件');
+    fs.writeFileSync(syncPath, '# 外部刷新\n\n新的正文已经同步。');
+    await synced('# 外部刷新\n\n新的正文已经同步。');
+    await previewMode();
+    assert.equal((await state()).preview.includes('新的正文已经同步。'), true, 'Preview refreshes after a real filesystem write');
+    assert.equal((await state()).tabs.length, syncTabCount, 'External changes reuse the existing tab');
+    assert.equal((await searchState()).focus, 'searchInput', 'Automatic reload leaves focus in find');
+    assert.equal((await searchState()).status, '无匹配结果', 'Search results refresh with the external text');
+    await click('#closeSearchButton');
+    const atomicPath = `${syncPath}.tmp`;
+    fs.writeFileSync(atomicPath, '# 原子保存\n\n其他编辑器替换了文件。');
+    fs.renameSync(atomicPath, syncPath);
+    await synced('# 原子保存\n\n其他编辑器替换了文件。');
+    await select(starterId);
+    fs.writeFileSync(syncPath, '# 后台同步\n\n更新未选中的标签。');
+    await synced('# 后台同步\n\n更新未选中的标签。');
+    assert.equal(await activeId(), starterId, 'Background file synchronization never selects its tab');
+    assert.equal((await state()).content, starterContent, 'Background synchronization leaves the selected draft unchanged');
+    await select(syncId);
+    fs.writeFileSync(syncPath, require('iconv-lite').encode('# 编码更新\n\n外部 UTF-16 正文。', 'utf-16le', { addBOM:true }));
+    await synced('# 编码更新\n\n外部 UTF-16 正文。');
+    assert.equal((await state()).encoding, 'utf-16le', 'External reload recognizes a new BOM encoding');
+    fs.writeFileSync(syncPath, '# UTF-8 切换\n\n外部程序改用了无 BOM 的 UTF-8。');
+    await synced('# UTF-8 切换\n\n外部程序改用了无 BOM 的 UTF-8。');
+    assert.equal((await state()).encoding, 'utf-8', 'A previous UTF-16 setting does not corrupt an external UTF-8 save');
+    // Local autosave stores a draft, not a write back to the disk file.
+    await click('#editModeButton');
+    const localSyncDraft = '# 本机草稿\n\n必须保留的编辑。';
+    await setContent(localSyncDraft);
+    await saved();
+    assert.equal((await syncStored()).diskDirty, true, 'Autosave retains divergence from the disk version');
+    assert.equal(fs.readFileSync(syncPath, 'utf8'), '# UTF-8 切换\n\n外部程序改用了无 BOM 的 UTF-8。');
+    const conflictText = '# 外部冲突\n\n另一个程序也修改了文件。';
+    fs.writeFileSync(syncPath, require('iconv-lite').encode(conflictText, 'utf-16le', { addBOM:true }));
+    await poll(async () => js("!document.querySelector('#externalChangeNotice').hidden"), 'A local draft conflicts with a real external edit');
+    assert.equal((await state()).content, localSyncDraft, 'A conflict never overwrites a locally autosaved draft');
+    assert.equal(await js(`document.querySelector('#documentTabs [data-document-id="${syncId}"]').closest('.document-tab-item').classList.contains('external-change')`), true, 'The conflicting tab is marked');
+    await checkLayout(900, 620);
+    if (process.env.LUMEN_TEST_SCREENSHOTS) {
+      fs.mkdirSync(process.env.LUMEN_TEST_SCREENSHOTS, { recursive:true });
+      fs.writeFileSync(path.join(process.env.LUMEN_TEST_SCREENSHOTS, 'external-file-conflict.png'), (await wc.capturePage()).toPNG());
+    }
+    await click('#keepLocalButton');
+    assert.equal((await state()).content, localSyncDraft);
+    assert.equal(await js("document.querySelector('#externalChangeNotice').hidden"), true);
+    await reload();
+    await poll(async () => js("documents.find(document => document.id === activeDocumentId)?.diskContent !== null"), 'Kept draft is compared with disk after reload');
+    assert.equal((await state()).content, localSyncDraft, 'The keep-draft decision survives a renderer restart');
+    assert.equal(await js("document.querySelector('#externalChangeNotice').hidden"), true, 'The already acknowledged disk version does not prompt again');
+    const latestExternal = '# 最新外部版本\n\n冲突时可以选择载入。';
+    fs.writeFileSync(syncPath, require('iconv-lite').encode(latestExternal, 'utf-16le', { addBOM:true }));
+    await poll(async () => js("!document.querySelector('#externalChangeNotice').hidden"), 'A later external revision is reported again');
+    await saved();
+    await reload();
+    await poll(async () => js("!document.querySelector('#externalChangeNotice').hidden"), 'An unresolved conflict is restored after restart');
+    assert.equal((await state()).content, localSyncDraft);
+    await click('#reloadExternalButton');
+    await synced(latestExternal);
+    assert.equal((await syncStored()).diskDirty, false, 'Accepting the external version resets divergence');
+    assert.equal(await js("document.querySelector('#externalChangeNotice').hidden"), true);
+    await previewMode();
+    // Catch a disk edit made while the renderer was not watching (e.g. app restart).
+    const restartExternal = '# 重启同步\n\n恢复的干净标签读取最新磁盘内容。';
+    fs.writeFileSync(syncPath, require('iconv-lite').encode(restartExternal, 'utf-16le', { addBOM:true }));
+    await reload();
+    await synced(restartExternal);
+    assert.equal((await state()).content, restartExternal);
+    fs.unlinkSync(syncPath);
+    await poll(async () => js("!document.querySelector('#externalChangeNotice').hidden && document.querySelector('#externalChangeMessage').textContent.includes('删除')"), 'Missing files preserve the draft and report the problem');
+    assert.equal((await state()).content, restartExternal);
+    assert.equal(await js("document.querySelector('#reloadExternalButton').hidden"), true, 'There is no load action for a deleted file');
+    fs.writeFileSync(syncPath, require('iconv-lite').encode('# 文件恢复\n\n删除后重建也继续同步。', 'utf-16le', { addBOM:true }));
+    await synced('# 文件恢复\n\n删除后重建也继续同步。');
+    assert.equal(await js("document.querySelector('#externalChangeNotice').hidden"), true);
+    fs.writeFileSync(syncPath, Buffer.alloc(5 * 1024 * 1024 + 1, 97));
+    await poll(async () => js("!document.querySelector('#externalChangeNotice').hidden && document.querySelector('#externalChangeMessage').textContent.includes('5 MB')"), 'Oversized external files cannot replace the current draft');
+    assert.equal((await state()).content, '# 文件恢复\n\n删除后重建也继续同步。');
+    fs.writeFileSync(syncPath, require('iconv-lite').encode('# 继续同步\n\n大小恢复正常。', 'utf-16le', { addBOM:true }));
+    await synced('# 继续同步\n\n大小恢复正常。');
+    await closeDocument(syncId);
+    const countAfterSyncClose = (await state()).tabs.length;
+    fs.writeFileSync(syncPath, '# 关闭后修改\n\n重新打开应使用最新内容。');
+    await openNativeFile(syncPath);
+    assert.equal(await activeId(), syncId, 'Reopening an externally changed file retains its original tab identity');
+    assert.equal((await state()).content, '# 关闭后修改\n\n重新打开应使用最新内容。');
+    assert.equal((await state()).tabs.length, countAfterSyncClose + 1);
+    const legacyFileDraft = '# 旧版本文件草稿\n\n没有磁盘版本记录时仍须保护。';
+    await setContent(legacyFileDraft);
+    await saved();
+    await js(`(() => {
+      clearTimeout(saveTimer);
+      window.removeEventListener('beforeunload', saveDocuments);
+      window.removeEventListener('pagehide', saveDocuments);
+      const stored = JSON.parse(localStorage.getItem('lumen-documents-v1'));
+      const document = stored.documents.find(document => document.id === ${JSON.stringify(syncId)});
+      delete document.diskDirty;
+      delete document.diskRevision;
+      localStorage.setItem('lumen-documents-v1', JSON.stringify(stored));
+    })()`);
+    fs.writeFileSync(syncPath, '# 升级前的外部修改\n\n保留选择权。');
+    await reload();
+    await poll(async () => js("!document.querySelector('#externalChangeNotice').hidden"), 'Legacy file drafts without a disk baseline get a safe conflict choice');
+    assert.equal((await state()).content, legacyFileDraft, 'Upgrade never silently discards a legacy file draft');
+    await click('#keepLocalButton');
+    await closeDocument(syncId);
+    await select(starterId);
+    console.log('PASS: real external file writes/atomic saves, background tabs, encoding changes, restart catch-up, draft conflict choices, legacy upgrade protection, deletion/recreation and size limits');
 
     await checkLayout(1280, 820);
     await click('#newDocumentButton');
@@ -636,7 +1190,7 @@ async function runElectron() {
         headings:[...root.querySelectorAll('h1,h2,h3,h4,h5,h6')].map(element => ({ text:element.textContent, id:element.id })),
         anchors:[...root.querySelectorAll('a[href^="#"]')].map(element => ({ text:element.textContent, href:element.getAttribute('href'), className:element.className })),
         footnoteText:root.textContent.includes('脚注正文第一段。') && root.textContent.includes('脚注正文第二段'),
-        unsafeNodes:[...root.querySelectorAll('script,style,iframe,object,embed,form,button,select,textarea')].filter(element => !(element.tagName.toLowerCase() === 'style' && element.closest('.mermaid-diagram svg'))).map(element => element.tagName),
+        unsafeNodes:[...root.querySelectorAll('script,style,iframe,object,embed,form,button,select,textarea')].filter(element => !(element.tagName.toLowerCase() === 'style' && element.closest('.mermaid-diagram svg')) && !(element.matches('button.table-expand-button') && element.closest('[data-preview-ui]'))).map(element => element.tagName),
         unsafeHandlers:[...root.querySelectorAll('*')].flatMap(element => [...element.attributes].filter(attribute => /^on/i.test(attribute.name))).length,
         unsafeUrls:[...root.querySelectorAll('[href],[src]')].flatMap(element => ['href','src'].map(name => element.getAttribute(name))).filter(value => ['javascript:','vbscript:','data:text/html','chrome:'].some(prefix => (value || '').toLowerCase().startsWith(prefix))),
         unsafeCss:dangerousStyle ? { position:dangerousStyle.style.position, top:dangerousStyle.style.top, left:dangerousStyle.style.left, zIndex:dangerousStyle.style.zIndex, backgroundImage:dangerousStyle.style.backgroundImage } : null,
